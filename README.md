@@ -135,11 +135,17 @@ The diagnostic search UI is available at:
 
 - `http://127.0.0.1:3000/dev/search/ui`
 
-The diagnostic JSON route is:
+The diagnostic JSON routes are:
 
 - `GET /dev/search?q=your+query&provider=tavily|exa`
+- `GET /dev/search/compare?q=your+query&searchLimit=5&extractLimit=3`
 
-When you start the server manually, search requests are logged in the Nest server console before dispatch and after completion.
+The UI supports two diagnostic flows:
+
+- single-provider search
+- search-then-extract comparison across Tavily and Exa
+
+When you start the server manually, search and extraction stages are logged in the Nest server console before dispatch and after completion.
 
 ## Current Status
 

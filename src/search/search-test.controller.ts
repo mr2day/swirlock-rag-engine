@@ -32,4 +32,38 @@ export class SearchTestController {
 
     return this.searchService.search(query, provider as SearchProvider);
   }
+
+  @Get('compare')
+  async compareSearchThenExtract(
+    @Query('q') query = '',
+    @Query('searchLimit') searchLimit = '5',
+    @Query('extractLimit') extractLimit = '3',
+  ) {
+    return this.searchService.compareSearchThenExtract(
+      query,
+      this.parsePositiveInt(searchLimit, 5, 'searchLimit', 10),
+      this.parsePositiveInt(extractLimit, 3, 'extractLimit', 5),
+    );
+  }
+
+  private parsePositiveInt(
+    rawValue: string,
+    fallback: number,
+    fieldName: string,
+    maxValue: number,
+  ): number {
+    if (!rawValue.trim()) {
+      return fallback;
+    }
+
+    const parsed = Number.parseInt(rawValue, 10);
+
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > maxValue) {
+      throw new BadRequestException(
+        `${fieldName} must be an integer between 1 and ${maxValue}.`,
+      );
+    }
+
+    return parsed;
+  }
 }
