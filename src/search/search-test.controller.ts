@@ -22,11 +22,11 @@ export class SearchTestController {
   @Get()
   async testSearch(
     @Query('q') query = '',
-    @Query('provider') provider = 'ddg',
+    @Query('provider') provider = 'tavily',
   ) {
     if (!isSearchProvider(provider)) {
       throw new BadRequestException(
-        'provider must be one of: ddg, tavily, exa.',
+        'provider must be one of: tavily, exa.',
       );
     }
 

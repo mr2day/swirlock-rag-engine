@@ -137,7 +137,7 @@ The diagnostic search UI is available at:
 
 The diagnostic JSON route is:
 
-- `GET /dev/search?q=your+query&provider=ddg|tavily|exa`
+- `GET /dev/search?q=your+query&provider=tavily|exa`
 
 When you start the server manually, search requests are logged in the Nest server console before dispatch and after completion.
 

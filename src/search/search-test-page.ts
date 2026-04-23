@@ -194,7 +194,6 @@ export const searchTestPageHtml = `<!DOCTYPE html>
             <div>
               <label for="provider">Provider</label>
               <select id="provider" name="provider">
-                <option value="ddg">DuckDuckGo</option>
                 <option value="tavily">Tavily</option>
                 <option value="exa">Exa</option>
               </select>
@@ -208,7 +207,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
           <p class="hint">
             Notes: Tavily requires <code>TAVILY_API_KEY</code>. Exa requires
-            <code>EXA_API_KEY</code>. DuckDuckGo works without API keys.
+            <code>EXA_API_KEY</code>.
           </p>
 
           <div>

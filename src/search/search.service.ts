@@ -1,7 +1,5 @@
 import {
   BadRequestException,
-  HttpException,
-  HttpStatus,
   Injectable,
   InternalServerErrorException,
   Logger,
@@ -9,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { tavily, type TavilyClient, type TavilySearchResponse } from '@tavily/core';
-import { search as searchDuckDuckGo, type SearchResults } from 'duck-duck-scrape';
 import Exa from 'exa-js';
 import type { SearchResponse } from 'exa-js';
 import type {
@@ -83,41 +80,13 @@ export class SearchService {
             raw,
           };
         }
-
-        case 'ddg':
-        default: {
-          const raw = await this.searchWithDuckDuckGo(normalizedQuery);
-          const latencyMs = Date.now() - startedAt;
-          const normalized = this.normalizeDuckDuckGoResults(raw);
-
-          this.logSuccess('ddg', latencyMs, normalized.length);
-
-          return {
-            provider: 'ddg',
-            query: normalizedQuery,
-            latencyMs,
-            normalized,
-            raw,
-          };
-        }
       }
     } catch (error) {
       if (
         error instanceof BadRequestException ||
-        error instanceof ServiceUnavailableException ||
-        error instanceof HttpException
+        error instanceof ServiceUnavailableException
       ) {
         throw error;
-      }
-
-      if (
-        error instanceof Error &&
-        error.message.toLowerCase().includes('making requests too quickly')
-      ) {
-        this.logger.warn(
-          `[${provider}] Provider rate-limited request: ${error.message}`,
-        );
-        throw new HttpException(error.message, HttpStatus.TOO_MANY_REQUESTS);
       }
 
       const message =
@@ -127,10 +96,6 @@ export class SearchService {
 
       throw new InternalServerErrorException(message);
     }
-  }
-
-  private async searchWithDuckDuckGo(query: string): Promise<SearchResults> {
-    return searchDuckDuckGo(query);
   }
 
   private async searchWithTavily(query: string): Promise<TavilySearchResponse> {
@@ -194,18 +159,6 @@ export class SearchService {
     this.tavilyClient = tavily({ apiKey });
 
     return this.tavilyClient;
-  }
-
-  private normalizeDuckDuckGoResults(
-    raw: SearchResults,
-  ): NormalizedSearchResult[] {
-    return raw.results.map((result) => ({
-      title: result.title,
-      url: result.url,
-      snippet: result.description,
-      score: null,
-      publishedAt: null,
-    }));
   }
 
   private normalizeTavilyResults(

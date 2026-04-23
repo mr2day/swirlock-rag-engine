@@ -1,4 +1,4 @@
-export const SEARCH_PROVIDERS = ['ddg', 'tavily', 'exa'] as const;
+export const SEARCH_PROVIDERS = ['tavily', 'exa'] as const;
 
 export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
 
