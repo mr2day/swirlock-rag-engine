@@ -64,6 +64,8 @@ export class ContentExcerptService {
     /weather near/i,
     /contact us/i,
     /subscription services/i,
+    /weather history/i,
+    /historical data/i,
   ];
 
   buildExcerpt(content: string, query: string): string {
@@ -157,7 +159,11 @@ export class ContentExcerptService {
       score += 6;
     }
 
-    if (/\b\d+\s?(°|°f|°c|f|c|mph|km\/h|%|mb|in)\b/i.test(block)) {
+    if (
+      /\b\d+(?:\.\d+)?\s?(?:°|deg(?:rees)?|f|c|mph|km\/h|kt|%|mb|hpa|in)\b/i.test(
+        lower,
+      )
+    ) {
       score += 18;
     }
 
@@ -187,6 +193,10 @@ export class ContentExcerptService {
       )
     ) {
       score -= 18;
+    }
+
+    if (/\b(history|historical|april 2026|may 2026|january|february)\b/i.test(lower)) {
+      score -= 20;
     }
 
     if (

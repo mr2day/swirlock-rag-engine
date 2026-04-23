@@ -1,4 +1,10 @@
 const HARDCODED_FALLBACK_LOCATION = 'Bucharest, Romania';
+const HARDCODED_FALLBACK_COUNTRY = 'romania';
+const HARDCODED_FALLBACK_USER_LOCATION = 'RO';
+const CURRENT_WEATHER_PREFERRED_EXCLUDE_DOMAINS = [
+  'climate-data.org',
+  'predictwind.com',
+];
 
 const LOCATION_SENSITIVE_PATTERNS = [
   /\b(weather|temperature|forecast|humidity|wind|dew point|feels like|outside)\b/i,
@@ -23,6 +29,15 @@ export interface SearchQueryResolution {
   effectiveQuery: string;
   appliedLocationFallback: string | null;
   notes: string[];
+  executionHints: SearchExecutionHints;
+}
+
+export interface SearchExecutionHints {
+  intent: 'general' | 'current-weather';
+  exaUserLocation: string | null;
+  tavilyCountry: string | null;
+  excludeDomains: string[];
+  forceFreshContent: boolean;
 }
 
 export function resolveSearchQuery(query: string): SearchQueryResolution {
@@ -34,12 +49,13 @@ export function resolveSearchQuery(query: string): SearchQueryResolution {
       effectiveQuery: originalQuery,
       appliedLocationFallback: null,
       notes: [],
+      executionHints: buildExecutionHints(originalQuery, null),
     };
   }
 
+  const isCurrentWeatherQuery = isLocationSensitiveQuery(originalQuery);
   const needsLocationFallback =
-    isLocationSensitiveQuery(originalQuery) &&
-    !hasExplicitLocation(originalQuery);
+    isCurrentWeatherQuery && !hasExplicitLocation(originalQuery);
 
   if (!needsLocationFallback) {
     return {
@@ -47,6 +63,7 @@ export function resolveSearchQuery(query: string): SearchQueryResolution {
       effectiveQuery: originalQuery,
       appliedLocationFallback: null,
       notes: [],
+      executionHints: buildExecutionHints(originalQuery, null),
     };
   }
 
@@ -59,6 +76,10 @@ export function resolveSearchQuery(query: string): SearchQueryResolution {
     notes: [
       `Location-sensitive query detected. Using hardcoded fallback location: ${HARDCODED_FALLBACK_LOCATION}.`,
     ],
+    executionHints: buildExecutionHints(
+      originalQuery,
+      HARDCODED_FALLBACK_LOCATION,
+    ),
   };
 }
 
@@ -71,11 +92,37 @@ function hasExplicitLocation(query: string): boolean {
 }
 
 function rewriteWithFallbackLocation(query: string): string {
-  const lower = query.toLowerCase();
-
-  if (/\b(weather|forecast)\b/.test(lower)) {
-    return `${query} in ${HARDCODED_FALLBACK_LOCATION}`;
+  if (isLocationSensitiveQuery(query)) {
+    return `current weather and temperature right now in ${HARDCODED_FALLBACK_LOCATION}`;
   }
 
-  return `current weather and temperature in ${HARDCODED_FALLBACK_LOCATION}: ${query}`;
+  return `${query} in ${HARDCODED_FALLBACK_LOCATION}`;
+}
+
+function buildExecutionHints(
+  query: string,
+  appliedLocationFallback: string | null,
+): SearchExecutionHints {
+  if (!isLocationSensitiveQuery(query)) {
+    return {
+      intent: 'general',
+      exaUserLocation: null,
+      tavilyCountry: null,
+      excludeDomains: [],
+      forceFreshContent: false,
+    };
+  }
+
+  const hasRomaniaContext =
+    appliedLocationFallback === HARDCODED_FALLBACK_LOCATION ||
+    /\bbucharest\b/i.test(query) ||
+    /\bromania\b/i.test(query);
+
+  return {
+    intent: 'current-weather',
+    exaUserLocation: hasRomaniaContext ? HARDCODED_FALLBACK_USER_LOCATION : null,
+    tavilyCountry: hasRomaniaContext ? HARDCODED_FALLBACK_COUNTRY : null,
+    excludeDomains: [...CURRENT_WEATHER_PREFERRED_EXCLUDE_DOMAINS],
+    forceFreshContent: true,
+  };
 }

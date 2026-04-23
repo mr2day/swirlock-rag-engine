@@ -15,7 +15,11 @@ import {
 import Exa, { type SearchResponse } from 'exa-js';
 import { ContentExcerptService } from './content-excerpt.service';
 import { cleanContent } from './content-cleaner';
-import { resolveSearchQuery } from './search-query-resolver';
+import { rankSearchResults } from './search-result-ranker';
+import {
+  resolveSearchQuery,
+  type SearchQueryResolution,
+} from './search-query-resolver';
 import type {
   ExtractStageResult,
   ExtractedDocument,
@@ -28,9 +32,22 @@ import type {
 } from './search.types';
 import { SEARCH_PROVIDERS } from './search.types';
 
-type ExaNoContentsSearchResponse = SearchResponse<{}>;
-type ExaTextSearchResponse = SearchResponse<{
+type ExaHighlightsSearchResponse = SearchResponse<{
+  highlights: {
+    query?: string;
+    maxCharacters: number;
+  };
+}>;
+type ExaExtractSearchResponse = SearchResponse<{
   text: {
+    maxCharacters: number;
+    verbosity?: 'compact' | 'standard' | 'full';
+    excludeSections?: Array<
+      'navigation' | 'footer' | 'sidebar' | 'metadata' | 'banner'
+    >;
+  };
+  highlights: {
+    query?: string;
     maxCharacters: number;
   };
 }>;
@@ -63,9 +80,16 @@ export class SearchService {
     try {
       switch (provider) {
         case 'tavily': {
-          const raw = await this.searchWithTavily(queryResolution.effectiveQuery, 5);
+          const raw = await this.searchWithTavily(
+            queryResolution.effectiveQuery,
+            5,
+            queryResolution,
+          );
           const latencyMs = Date.now() - startedAt;
-          const normalized = this.normalizeTavilyResults(raw);
+          const normalized = rankSearchResults(
+            this.normalizeTavilyResults(raw),
+            queryResolution.executionHints,
+          );
 
           this.logSuccess(provider, latencyMs, normalized.length);
 
@@ -82,9 +106,16 @@ export class SearchService {
         }
 
         case 'exa': {
-          const raw = await this.searchWithExa(queryResolution.effectiveQuery, 5);
+          const raw = await this.searchWithExa(
+            queryResolution.effectiveQuery,
+            5,
+            queryResolution,
+          );
           const latencyMs = Date.now() - startedAt;
-          const normalized = this.normalizeExaResults(raw);
+          const normalized = rankSearchResults(
+            this.normalizeExaResults(raw),
+            queryResolution.executionHints,
+          );
 
           this.logSuccess(provider, latencyMs, normalized.length);
 
@@ -133,7 +164,7 @@ export class SearchService {
       SEARCH_PROVIDERS.map((provider) =>
         this.compareProvider(
           provider,
-          queryResolution.effectiveQuery,
+          queryResolution,
           searchLimit,
           extractLimit,
         ),
@@ -161,7 +192,7 @@ export class SearchService {
 
   private async compareProvider(
     provider: SearchProvider,
-    query: string,
+    queryResolution: SearchQueryResolution,
     searchLimit: number,
     extractLimit: number,
   ): Promise<ProviderComparisonResult> {
@@ -170,9 +201,19 @@ export class SearchService {
     try {
       switch (provider) {
         case 'tavily':
-          return await this.compareTavily(query, searchLimit, extractLimit, startedAt);
+          return await this.compareTavily(
+            queryResolution,
+            searchLimit,
+            extractLimit,
+            startedAt,
+          );
         case 'exa':
-          return await this.compareExa(query, searchLimit, extractLimit, startedAt);
+          return await this.compareExa(
+            queryResolution,
+            searchLimit,
+            extractLimit,
+            startedAt,
+          );
       }
     } catch (error) {
       const message = this.getErrorMessage(error);
@@ -191,18 +232,26 @@ export class SearchService {
   }
 
   private async compareTavily(
-    query: string,
+    queryResolution: SearchQueryResolution,
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
   ): Promise<ProviderComparisonResult> {
     const searchStartedAt = Date.now();
+    const query = queryResolution.effectiveQuery;
 
     this.logger.log(`[compare:tavily] Search stage started.`);
 
-    const searchRaw = await this.searchWithTavilyDiscovery(query, searchLimit);
+    const searchRaw = await this.searchWithTavilyDiscovery(
+      query,
+      searchLimit,
+      queryResolution,
+    );
     const searchLatencyMs = Date.now() - searchStartedAt;
-    const topResults = this.normalizeTavilyResults(searchRaw);
+    const topResults = rankSearchResults(
+      this.normalizeTavilyResults(searchRaw),
+      queryResolution.executionHints,
+    );
     const urlsToExtract = topResults.slice(0, extractLimit).map((result) => result.url);
 
     const searchStage: SearchStageResult = {
@@ -228,7 +277,7 @@ export class SearchService {
 
     const extractRaw =
       urlsToExtract.length > 0
-        ? await this.extractWithTavily(urlsToExtract)
+        ? await this.extractWithTavily(urlsToExtract, query, queryResolution)
         : this.createEmptyTavilyExtractResponse();
     const extractLatencyMs = Date.now() - extractStartedAt;
     const documents = this.normalizeTavilyExtractedDocuments(
@@ -270,18 +319,26 @@ export class SearchService {
   }
 
   private async compareExa(
-    query: string,
+    queryResolution: SearchQueryResolution,
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
   ): Promise<ProviderComparisonResult> {
     const searchStartedAt = Date.now();
+    const query = queryResolution.effectiveQuery;
 
     this.logger.log(`[compare:exa] Search stage started.`);
 
-    const searchRaw = await this.searchWithExaDiscovery(query, searchLimit);
+    const searchRaw = await this.searchWithExaDiscovery(
+      query,
+      searchLimit,
+      queryResolution,
+    );
     const searchLatencyMs = Date.now() - searchStartedAt;
-    const topResults = this.normalizeExaDiscoveryResults(searchRaw);
+    const topResults = rankSearchResults(
+      this.normalizeExaResults(searchRaw),
+      queryResolution.executionHints,
+    );
     const urlsToExtract = topResults.slice(0, extractLimit).map((result) => result.url);
 
     const searchStage: SearchStageResult = {
@@ -307,7 +364,7 @@ export class SearchService {
 
     const extractRaw =
       urlsToExtract.length > 0
-        ? await this.extractWithExa(urlsToExtract)
+        ? await this.extractWithExa(urlsToExtract, query, queryResolution)
         : this.createEmptyExaExtractResponse();
     const extractLatencyMs = Date.now() - extractStartedAt;
     const documents = this.normalizeExaExtractedDocuments(
@@ -317,12 +374,28 @@ export class SearchService {
     );
 
     const extractedUrls = new Set(documents.map((document) => document.url));
+    const failedStatusesByUrl = new Map(
+      (extractRaw.statuses ?? [])
+        .filter((status) => status.status === 'error')
+        .map((status) => [status.id, status] as const),
+    );
     const failedSources = urlsToExtract
       .filter((url) => !extractedUrls.has(url))
-      .map((url) => ({
-        url,
-        error: 'No content returned by Exa.',
-      }));
+      .map((url) => {
+        const failedStatus = failedStatusesByUrl.get(url);
+
+        if (!failedStatus) {
+          return {
+            url,
+            error: 'No content returned by Exa.',
+          };
+        }
+
+        return {
+          url,
+          error: `Exa status: ${failedStatus.status}`,
+        };
+      });
 
     const extractStage: ExtractStageResult = {
       latencyMs: extractLatencyMs,
@@ -356,6 +429,7 @@ export class SearchService {
   private async searchWithTavily(
     query: string,
     maxResults: number,
+    queryResolution: SearchQueryResolution,
   ): Promise<TavilySearchResponse> {
     const tavilyClient = this.getTavilyClient();
 
@@ -366,9 +440,19 @@ export class SearchService {
     }
 
     return tavilyClient.search(query, {
-      searchDepth: 'basic',
+      searchDepth:
+        queryResolution.executionHints.intent === 'current-weather'
+          ? 'advanced'
+          : 'basic',
       maxResults,
-      includeAnswer: 'basic',
+      chunksPerSource:
+        queryResolution.executionHints.intent === 'current-weather' ? 1 : undefined,
+      country: queryResolution.executionHints.tavilyCountry ?? undefined,
+      excludeDomains:
+        queryResolution.executionHints.excludeDomains.length > 0
+          ? queryResolution.executionHints.excludeDomains
+          : undefined,
+      includeAnswer: false,
       includeRawContent: false,
     });
   }
@@ -376,6 +460,7 @@ export class SearchService {
   private async searchWithTavilyDiscovery(
     query: string,
     maxResults: number,
+    queryResolution: SearchQueryResolution,
   ): Promise<TavilySearchResponse> {
     const tavilyClient = this.getTavilyClient();
 
@@ -388,6 +473,13 @@ export class SearchService {
     return tavilyClient.search(query, {
       searchDepth: 'advanced',
       maxResults,
+      chunksPerSource:
+        queryResolution.executionHints.intent === 'current-weather' ? 1 : 3,
+      country: queryResolution.executionHints.tavilyCountry ?? undefined,
+      excludeDomains:
+        queryResolution.executionHints.excludeDomains.length > 0
+          ? queryResolution.executionHints.excludeDomains
+          : undefined,
       includeAnswer: false,
       includeRawContent: false,
       includeUsage: true,
@@ -396,6 +488,8 @@ export class SearchService {
 
   private async extractWithTavily(
     urls: string[],
+    query: string,
+    queryResolution: SearchQueryResolution,
   ): Promise<TavilyExtractResponse> {
     const tavilyClient = this.getTavilyClient();
 
@@ -407,7 +501,10 @@ export class SearchService {
 
     return tavilyClient.extract(urls, {
       extractDepth: 'advanced',
-      format: 'markdown',
+      format: 'text',
+      query,
+      chunksPerSource:
+        queryResolution.executionHints.intent === 'current-weather' ? 2 : 3,
       includeUsage: true,
     });
   }
@@ -415,16 +512,25 @@ export class SearchService {
   private async searchWithExa(
     query: string,
     numResults: number,
-  ): Promise<ExaTextSearchResponse> {
+    queryResolution: SearchQueryResolution,
+  ): Promise<ExaHighlightsSearchResponse> {
     const exaClient = this.getExaClient();
 
     return exaClient.search(query, {
       numResults,
       type: 'auto',
+      userLocation: queryResolution.executionHints.exaUserLocation ?? undefined,
+      excludeDomains:
+        queryResolution.executionHints.excludeDomains.length > 0
+          ? queryResolution.executionHints.excludeDomains
+          : undefined,
       contents: {
-        text: {
-          maxCharacters: 1200,
+        highlights: {
+          query,
+          maxCharacters: 420,
         },
+        filterEmptyResults: true,
+        maxAgeHours: queryResolution.executionHints.forceFreshContent ? 0 : undefined,
       },
     });
   }
@@ -432,23 +538,56 @@ export class SearchService {
   private async searchWithExaDiscovery(
     query: string,
     numResults: number,
-  ): Promise<ExaNoContentsSearchResponse> {
+    queryResolution: SearchQueryResolution,
+  ): Promise<ExaHighlightsSearchResponse> {
     const exaClient = this.getExaClient();
 
     return exaClient.search(query, {
       numResults,
       type: 'auto',
-      contents: false,
+      userLocation: queryResolution.executionHints.exaUserLocation ?? undefined,
+      excludeDomains:
+        queryResolution.executionHints.excludeDomains.length > 0
+          ? queryResolution.executionHints.excludeDomains
+          : undefined,
+      contents: {
+        highlights: {
+          query,
+          maxCharacters: 420,
+        },
+        filterEmptyResults: true,
+        maxAgeHours: queryResolution.executionHints.forceFreshContent ? 0 : undefined,
+      },
     });
   }
 
-  private async extractWithExa(urls: string[]): Promise<ExaTextSearchResponse> {
+  private async extractWithExa(
+    urls: string[],
+    query: string,
+    queryResolution: SearchQueryResolution,
+  ): Promise<ExaExtractSearchResponse> {
     const exaClient = this.getExaClient();
 
     return exaClient.getContents(urls, {
       text: {
-        maxCharacters: 4000,
+        maxCharacters:
+          queryResolution.executionHints.intent === 'current-weather' ? 1800 : 2600,
+        verbosity:
+          queryResolution.executionHints.intent === 'current-weather'
+            ? 'compact'
+            : undefined,
+        excludeSections:
+          queryResolution.executionHints.intent === 'current-weather'
+            ? ['navigation', 'footer', 'sidebar', 'metadata', 'banner']
+            : undefined,
       },
+      highlights: {
+        query,
+        maxCharacters:
+          queryResolution.executionHints.intent === 'current-weather' ? 900 : 1200,
+      },
+      filterEmptyResults: true,
+      maxAgeHours: queryResolution.executionHints.forceFreshContent ? 0 : undefined,
     });
   }
 
@@ -497,24 +636,12 @@ export class SearchService {
   }
 
   private normalizeExaResults(
-    raw: ExaTextSearchResponse,
+    raw: ExaHighlightsSearchResponse,
   ): NormalizedSearchResult[] {
     return raw.results.map((result) => ({
       title: result.title ?? result.url,
       url: result.url,
-      snippet: this.normalizeSearchSnippet(result.text ?? ''),
-      score: result.score ?? null,
-      publishedAt: result.publishedDate ?? null,
-    }));
-  }
-
-  private normalizeExaDiscoveryResults(
-    raw: ExaNoContentsSearchResponse,
-  ): NormalizedSearchResult[] {
-    return raw.results.map((result) => ({
-      title: result.title ?? result.url,
-      url: result.url,
-      snippet: '',
+      snippet: this.normalizeSearchSnippet(this.getExaSnippet(result)),
       score: result.score ?? null,
       publishedAt: result.publishedDate ?? null,
     }));
@@ -546,7 +673,7 @@ export class SearchService {
   }
 
   private normalizeExaExtractedDocuments(
-    raw: ExaTextSearchResponse,
+    raw: ExaExtractSearchResponse,
     searchResults: NormalizedSearchResult[],
     query: string,
   ): ExtractedDocument[] {
@@ -556,7 +683,7 @@ export class SearchService {
 
     return raw.results.map((result) => {
       const searchResult = searchResultsByUrl.get(result.url);
-      const content = result.text ?? '';
+      const content = this.getExaContent(result);
 
       return {
         title: result.title ?? searchResult?.title ?? result.url,
@@ -565,7 +692,11 @@ export class SearchService {
         score: result.score ?? searchResult?.score ?? null,
         content,
         contentLength: content.length,
-        excerpt: this.contentExcerptService.buildExcerpt(content, query),
+        excerpt: this.buildExcerptFromProviderContent(
+          result.highlights,
+          content,
+          query,
+        ),
       };
     });
   }
@@ -582,7 +713,7 @@ export class SearchService {
     };
   }
 
-  private createEmptyExaExtractResponse(): ExaTextSearchResponse {
+  private createEmptyExaExtractResponse(): ExaExtractSearchResponse {
     return {
       results: [],
       requestId: 'skipped-no-urls',
@@ -623,6 +754,59 @@ export class SearchService {
     }
 
     return `${cleanedSnippet.slice(0, 417).trimEnd()}...`;
+  }
+
+  private getExaSnippet(result: {
+    text?: string | null;
+    highlights?: string[] | null;
+  }): string {
+    const highlightsText = this.joinHighlights(result.highlights);
+
+    if (highlightsText) {
+      return highlightsText;
+    }
+
+    return result.text ?? '';
+  }
+
+  private getExaContent(result: {
+    text?: string | null;
+    highlights?: string[] | null;
+  }): string {
+    const text = result.text ?? '';
+
+    if (text) {
+      return text;
+    }
+
+    return this.joinHighlights(result.highlights);
+  }
+
+  private buildExcerptFromProviderContent(
+    highlights: string[] | null | undefined,
+    content: string,
+    query: string,
+  ): string {
+    const highlightsText = cleanContent(this.joinHighlights(highlights));
+
+    if (highlightsText) {
+      return highlightsText.length <= 900
+        ? highlightsText
+        : `${highlightsText.slice(0, 897).trimEnd()}...`;
+    }
+
+    return this.contentExcerptService.buildExcerpt(content, query);
+  }
+
+  private joinHighlights(highlights: string[] | null | undefined): string {
+    if (!Array.isArray(highlights) || highlights.length === 0) {
+      return '';
+    }
+
+    return highlights
+      .map((highlight) => highlight.trim())
+      .filter((highlight) => highlight.length > 0)
+      .join(' ');
   }
 
   private getErrorMessage(error: unknown): string {

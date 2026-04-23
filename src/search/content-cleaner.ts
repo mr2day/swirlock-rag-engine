@@ -24,10 +24,21 @@ export function cleanContent(dirty: string): string {
     /^apps & downloads$/i,
     /^subscription services$/i,
     /^more$/i,
+    /^sign in$/i,
+    /^settings$/i,
+    /^press$/i,
+    /^education$/i,
+    /^feedback$/i,
+    /^careers$/i,
+    /^maps$/i,
+    /^alerts$/i,
+    /^life$/i,
+    /^news & videos$/i,
   ];
 
   let cleaned = dirty.replace(/\r\n/g, '\n');
 
+  cleaned = cleaned.replace(/\u00c2\u00b0/g, '\u00b0');
   cleaned = cleaned.replace(/!\[[^\]]*]\([^)]*\)/g, ' ');
   cleaned = cleaned.replace(/\[(Image|Video)\s+\d+:[^\]]*]/gi, ' ');
   cleaned = cleaned.replace(/\[(Image|Video)\s+\d+]/gi, ' ');
@@ -40,6 +51,8 @@ export function cleanContent(dirty: string): string {
     .split('\n')
     .map((line) => line.replace(/\s+/g, ' ').trim())
     .filter((line) => line.length > 0)
+    .filter((line) => !/^[-:| ]+$/.test(line))
+    .filter((line) => !(line.split(/\s+/).length === 1 && line.length <= 2))
     .filter((line) => !discardLinePatterns.some((pattern) => pattern.test(line)))
     .join('\n');
 
