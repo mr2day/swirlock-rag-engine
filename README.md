@@ -119,6 +119,28 @@ That repository is the single source of truth for cross-service contracts.
 
 This repository should stay focused on the RAG Engine implementation and its own internal design.
 
+## Local Configuration
+
+The app loads environment variables from `.env.local` and `.env`.
+
+For local testing, create a `.env` file based on `.env.example`:
+
+```env
+PORT=3000
+TAVILY_API_KEY=your_tavily_key
+EXA_API_KEY=your_exa_key
+```
+
+The diagnostic search UI is available at:
+
+- `http://127.0.0.1:3000/dev/search/ui`
+
+The diagnostic JSON route is:
+
+- `GET /dev/search?q=your+query&provider=ddg|tavily|exa`
+
+When you start the server manually, search requests are logged in the Nest server console before dispatch and after completion.
+
 ## Current Status
 
 This repository is still at an early implementation stage.

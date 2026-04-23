@@ -4,9 +4,11 @@ import {
   HttpStatus,
   Injectable,
   InternalServerErrorException,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { tavily, type TavilySearchResponse } from '@tavily/core';
+import { ConfigService } from '@nestjs/config';
+import { tavily, type TavilyClient, type TavilySearchResponse } from '@tavily/core';
 import { search as searchDuckDuckGo, type SearchResults } from 'duck-duck-scrape';
 import Exa from 'exa-js';
 import type { SearchResponse } from 'exa-js';
@@ -24,11 +26,13 @@ type ExaTextSearchResponse = SearchResponse<{
 
 @Injectable()
 export class SearchService {
+  private readonly logger = new Logger(SearchService.name);
+
   private exaClient: Exa | null = null;
 
-  private tavilyClient = process.env.TAVILY_API_KEY
-    ? tavily({ apiKey: process.env.TAVILY_API_KEY })
-    : null;
+  private tavilyClient: TavilyClient | null = null;
+
+  constructor(private readonly configService: ConfigService) {}
 
   async search(
     query: string,
@@ -42,28 +46,40 @@ export class SearchService {
 
     const startedAt = Date.now();
 
+    this.logger.log(
+      `[${provider}] Dispatching search request for query: ${this.formatQueryForLog(normalizedQuery)}`,
+    );
+
     try {
       switch (provider) {
         case 'tavily': {
           const raw = await this.searchWithTavily(normalizedQuery);
+          const latencyMs = Date.now() - startedAt;
+          const normalized = this.normalizeTavilyResults(raw);
+
+          this.logSuccess(provider, latencyMs, normalized.length);
 
           return {
             provider,
             query: normalizedQuery,
-            latencyMs: Date.now() - startedAt,
-            normalized: this.normalizeTavilyResults(raw),
+            latencyMs,
+            normalized,
             raw,
           };
         }
 
         case 'exa': {
           const raw = await this.searchWithExa(normalizedQuery);
+          const latencyMs = Date.now() - startedAt;
+          const normalized = this.normalizeExaResults(raw);
+
+          this.logSuccess(provider, latencyMs, normalized.length);
 
           return {
             provider,
             query: normalizedQuery,
-            latencyMs: Date.now() - startedAt,
-            normalized: this.normalizeExaResults(raw),
+            latencyMs,
+            normalized,
             raw,
           };
         }
@@ -71,12 +87,16 @@ export class SearchService {
         case 'ddg':
         default: {
           const raw = await this.searchWithDuckDuckGo(normalizedQuery);
+          const latencyMs = Date.now() - startedAt;
+          const normalized = this.normalizeDuckDuckGoResults(raw);
+
+          this.logSuccess('ddg', latencyMs, normalized.length);
 
           return {
             provider: 'ddg',
             query: normalizedQuery,
-            latencyMs: Date.now() - startedAt,
-            normalized: this.normalizeDuckDuckGoResults(raw),
+            latencyMs,
+            normalized,
             raw,
           };
         }
@@ -94,11 +114,16 @@ export class SearchService {
         error instanceof Error &&
         error.message.toLowerCase().includes('making requests too quickly')
       ) {
+        this.logger.warn(
+          `[${provider}] Provider rate-limited request: ${error.message}`,
+        );
         throw new HttpException(error.message, HttpStatus.TOO_MANY_REQUESTS);
       }
 
       const message =
         error instanceof Error ? error.message : 'Search provider request failed.';
+
+      this.logger.error(`[${provider}] Search failed: ${message}`);
 
       throw new InternalServerErrorException(message);
     }
@@ -109,13 +134,15 @@ export class SearchService {
   }
 
   private async searchWithTavily(query: string): Promise<TavilySearchResponse> {
-    if (!this.tavilyClient) {
+    const tavilyClient = this.getTavilyClient();
+
+    if (!tavilyClient) {
       throw new ServiceUnavailableException(
         'TAVILY_API_KEY is not configured.',
       );
     }
 
-    return this.tavilyClient.search(query, {
+    return tavilyClient.search(query, {
       searchDepth: 'basic',
       maxResults: 5,
       includeAnswer: 'basic',
@@ -142,7 +169,7 @@ export class SearchService {
       return this.exaClient;
     }
 
-    const apiKey = process.env.EXA_API_KEY;
+    const apiKey = this.configService.get<string>('EXA_API_KEY');
 
     if (!apiKey) {
       throw new ServiceUnavailableException('EXA_API_KEY is not configured.');
@@ -151,6 +178,22 @@ export class SearchService {
     this.exaClient = new Exa(apiKey);
 
     return this.exaClient;
+  }
+
+  private getTavilyClient(): TavilyClient | null {
+    if (this.tavilyClient) {
+      return this.tavilyClient;
+    }
+
+    const apiKey = this.configService.get<string>('TAVILY_API_KEY');
+
+    if (!apiKey) {
+      return null;
+    }
+
+    this.tavilyClient = tavily({ apiKey });
+
+    return this.tavilyClient;
   }
 
   private normalizeDuckDuckGoResults(
@@ -187,5 +230,19 @@ export class SearchService {
       score: result.score ?? null,
       publishedAt: result.publishedDate ?? null,
     }));
+  }
+
+  private logSuccess(
+    provider: SearchProvider,
+    latencyMs: number,
+    resultCount: number,
+  ): void {
+    this.logger.log(
+      `[${provider}] Search completed in ${latencyMs}ms with ${resultCount} normalized result(s).`,
+    );
+  }
+
+  private formatQueryForLog(query: string): string {
+    return query.length > 180 ? `${query.slice(0, 177)}...` : query;
   }
 }
