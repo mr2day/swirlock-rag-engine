@@ -32,6 +32,8 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       body {
         margin: 0;
         min-height: 100vh;
+        display: flex;
+        justify-content: center;
         font-family: "Segoe UI", system-ui, sans-serif;
         background:
           radial-gradient(circle at top left, rgba(14, 99, 156, 0.22) 0, transparent 22rem),
@@ -41,9 +43,9 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       }
 
       .page {
-        width: min(1100px, calc(100vw - 2rem));
-        margin: 2.25rem auto;
-        padding: 1rem;
+        width: min(90vw, 780px);
+        margin: 0;
+        padding: 1rem 0 2rem;
       }
 
       .panel {
@@ -59,10 +61,11 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         display: flex;
         flex-wrap: wrap;
         gap: 1rem;
-        align-items: flex-start;
-        justify-content: space-between;
+        align-items: center;
+        justify-content: center;
         padding: 1.5rem;
         border-bottom: 1px solid var(--border);
+        text-align: center;
         background:
           linear-gradient(135deg, rgba(14, 99, 156, 0.15), transparent 55%),
           linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
@@ -78,7 +81,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       .subtitle {
         margin: 0;
-        max-width: 52rem;
+        max-width: 42rem;
         color: var(--muted);
         font-size: 0.98rem;
         line-height: 1.55;
@@ -88,6 +91,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         display: flex;
         flex-wrap: wrap;
         gap: 0.65rem;
+        justify-content: center;
       }
 
       .badge {
@@ -116,6 +120,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         font-size: 0.9rem;
         font-weight: 600;
         letter-spacing: 0.01em;
+        text-align: center;
       }
 
       textarea,
@@ -160,6 +165,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         display: grid;
         gap: 1rem;
         grid-template-columns: minmax(0, 1fr);
+        justify-items: center;
       }
 
       .actions {
@@ -167,6 +173,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         flex-wrap: wrap;
         gap: 0.75rem;
         align-items: center;
+        justify-content: center;
       }
 
       button {
@@ -199,6 +206,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         min-height: 1.2rem;
         color: var(--muted);
         font-size: 0.95rem;
+        text-align: center;
       }
 
       .status.success {
@@ -234,6 +242,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         border: 1px solid var(--border);
         border-radius: 10px;
         background: var(--panel-muted);
+        text-align: center;
       }
 
       code {
@@ -248,8 +257,9 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       .results-header {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        justify-content: space-between;
+        justify-content: center;
         gap: 1rem;
         margin-bottom: 0.5rem;
       }
@@ -257,20 +267,51 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       .results-caption {
         color: var(--muted);
         font-size: 0.85rem;
+        text-align: center;
       }
 
-      @media (min-width: 700px) {
+      @media (min-width: 760px) {
+        .page {
+          width: min(90vw, 920px);
+          padding-top: 1.5rem;
+        }
+
+        .hero {
+          justify-content: space-between;
+          text-align: left;
+        }
+
+        .hero-meta {
+          justify-content: flex-end;
+        }
+
         .controls {
           grid-template-columns: minmax(0, 1fr) 15rem;
           align-items: end;
+          justify-items: stretch;
+        }
+
+        .actions {
+          justify-content: flex-start;
+        }
+
+        .results-header {
+          flex-direction: row;
+          justify-content: space-between;
+        }
+
+        label,
+        .status,
+        .hint,
+        .results-caption {
+          text-align: left;
         }
       }
 
-      @media (max-width: 699px) {
+      @media (max-width: 759px) {
         .page {
-          margin: 1rem auto;
-          width: min(100vw, calc(100vw - 1rem));
-          padding: 0.5rem;
+          width: 90vw;
+          padding: 0.75rem 0 1.5rem;
         }
 
         .hero,
