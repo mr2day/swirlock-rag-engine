@@ -111,6 +111,12 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         display: grid;
         gap: 1.4rem;
         padding: 1.5rem;
+        min-width: 0;
+      }
+
+      .content > * {
+        width: 100%;
+        min-width: 0;
       }
 
       label {
@@ -166,6 +172,12 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         gap: 1rem;
         grid-template-columns: minmax(0, 1fr);
         justify-items: center;
+        min-width: 0;
+      }
+
+      .controls > * {
+        width: 100%;
+        min-width: 0;
       }
 
       .actions {
@@ -219,9 +231,13 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       pre {
         margin: 0;
+        width: 100%;
+        max-width: 100%;
         padding: 1.1rem 1.2rem;
         min-height: 22rem;
-        overflow: auto;
+        height: min(50vh, 28rem);
+        overflow-x: auto;
+        overflow-y: auto;
         border-radius: 12px;
         border: 1px solid var(--border);
         background:
@@ -231,6 +247,9 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         font-family: Consolas, "Cascadia Code", "Courier New", monospace;
         font-size: 0.9rem;
         line-height: 1.45;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
         box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
       }
 
