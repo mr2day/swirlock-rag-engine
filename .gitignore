@@ -4,6 +4,7 @@ coverage/
 
 .env
 .env.*
+.server.*
 
 .webpack/
 .serverless/**/*.zip

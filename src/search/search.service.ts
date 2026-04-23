@@ -1,5 +1,7 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   InternalServerErrorException,
   ServiceUnavailableException,
@@ -82,9 +84,17 @@ export class SearchService {
     } catch (error) {
       if (
         error instanceof BadRequestException ||
-        error instanceof ServiceUnavailableException
+        error instanceof ServiceUnavailableException ||
+        error instanceof HttpException
       ) {
         throw error;
+      }
+
+      if (
+        error instanceof Error &&
+        error.message.toLowerCase().includes('making requests too quickly')
+      ) {
+        throw new HttpException(error.message, HttpStatus.TOO_MANY_REQUESTS);
       }
 
       const message =
