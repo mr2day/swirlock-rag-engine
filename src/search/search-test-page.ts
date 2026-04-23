@@ -255,6 +255,16 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         line-height: 1.55;
       }
 
+      .notice {
+        margin: 0;
+        padding: 0.9rem 1rem;
+        border: 1px solid rgba(215, 186, 125, 0.4);
+        border-radius: 10px;
+        background: rgba(215, 186, 125, 0.1);
+        color: #ead7ab;
+        line-height: 1.55;
+      }
+
       code {
         padding: 0.15rem 0.4rem;
         border: 1px solid var(--border-strong);
@@ -650,6 +660,24 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         return text.slice(0, limit - 3) + '...';
       }
 
+      function renderNotesBlock(payload) {
+        const notes = Array.isArray(payload.notes) ? payload.notes : [];
+
+        if (!payload.appliedLocationFallback && notes.length === 0) {
+          return '';
+        }
+
+        const lines = [];
+
+        if (payload.appliedLocationFallback) {
+          lines.push('Location fallback applied: ' + payload.appliedLocationFallback);
+        }
+
+        notes.forEach((note) => lines.push(note));
+
+        return '<p class="notice">' + escapeHtml(lines.join(' ')) + '</p>';
+      }
+
       function setLoadingState(isLoading) {
         searchButton.disabled = isLoading;
         compareButton.disabled = isLoading;
@@ -686,7 +714,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                     escapeHtml(result.url) +
                   '</a>' +
                 '</div>' +
-                '<p>' + escapeHtml(result.snippet || 'No snippet returned.') + '</p>' +
+                '<p>' + escapeHtml(makeExcerpt(result.snippet || 'No snippet returned.', 420)) + '</p>' +
               '</article>'
             ).join('') +
           '</div>'
@@ -748,7 +776,9 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                 renderMetric('Results', formatNumber(payload.normalized ? payload.normalized.length : 0)) +
                 renderMetric('Provider', payload.provider) +
                 renderMetric('Query', payload.query) +
+                renderMetric('Effective query', payload.effectiveQuery || payload.query) +
               '</div>' +
+              renderNotesBlock(payload) +
               '<section class="stage-block">' +
                 '<h4 class="stage-title">Top results</h4>' +
                 renderTopResults(payload.normalized || []) +
@@ -783,7 +813,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                 '<span class="provider-status ok">ok</span>' +
               '</div>' +
               '<div class="provider-body">' +
-                '<div class="metric-grid">' +
+              '<div class="metric-grid">' +
                   renderMetric('Total latency', formatMillis(provider.totalLatencyMs)) +
                   renderMetric('Search latency', formatMillis(search ? search.latencyMs : null)) +
                   renderMetric('Extract latency', formatMillis(extract ? extract.latencyMs : null)) +
@@ -804,6 +834,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                             : 'n/a'
                   ) +
                 '</div>' +
+                renderNotesBlock(payload) +
                 '<section class="stage-block">' +
                   '<h4 class="stage-title">Search stage</h4>' +
                   renderTopResults(search ? search.topResults : []) +

@@ -17,6 +17,9 @@ export interface NormalizedSearchResult {
 export interface SearchExecutionResult {
   provider: SearchProvider;
   query: string;
+  effectiveQuery: string;
+  appliedLocationFallback: string | null;
+  notes: string[];
   latencyMs: number;
   normalized: NormalizedSearchResult[];
   raw: unknown;
@@ -68,6 +71,9 @@ export interface ProviderComparisonResult {
 
 export interface SearchExtractComparisonResult {
   query: string;
+  effectiveQuery: string;
+  appliedLocationFallback: string | null;
+  notes: string[];
   searchLimit: number;
   extractLimit: number;
   totalLatencyMs: number;

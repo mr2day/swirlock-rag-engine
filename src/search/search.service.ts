@@ -14,6 +14,8 @@ import {
 } from '@tavily/core';
 import Exa, { type SearchResponse } from 'exa-js';
 import { ContentExcerptService } from './content-excerpt.service';
+import { cleanContent } from './content-cleaner';
+import { resolveSearchQuery } from './search-query-resolver';
 import type {
   ExtractStageResult,
   ExtractedDocument,
@@ -51,16 +53,17 @@ export class SearchService {
     provider: SearchProvider,
   ): Promise<SearchExecutionResult> {
     const normalizedQuery = this.normalizeQuery(query);
+    const queryResolution = resolveSearchQuery(normalizedQuery);
     const startedAt = Date.now();
 
     this.logger.log(
-      `[${provider}] Dispatching search request for query: ${this.formatQueryForLog(normalizedQuery)}`,
+      `[${provider}] Dispatching search request for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
     );
 
     try {
       switch (provider) {
         case 'tavily': {
-          const raw = await this.searchWithTavily(normalizedQuery, 5);
+          const raw = await this.searchWithTavily(queryResolution.effectiveQuery, 5);
           const latencyMs = Date.now() - startedAt;
           const normalized = this.normalizeTavilyResults(raw);
 
@@ -69,6 +72,9 @@ export class SearchService {
           return {
             provider,
             query: normalizedQuery,
+            effectiveQuery: queryResolution.effectiveQuery,
+            appliedLocationFallback: queryResolution.appliedLocationFallback,
+            notes: queryResolution.notes,
             latencyMs,
             normalized,
             raw,
@@ -76,7 +82,7 @@ export class SearchService {
         }
 
         case 'exa': {
-          const raw = await this.searchWithExa(normalizedQuery, 5);
+          const raw = await this.searchWithExa(queryResolution.effectiveQuery, 5);
           const latencyMs = Date.now() - startedAt;
           const normalized = this.normalizeExaResults(raw);
 
@@ -85,6 +91,9 @@ export class SearchService {
           return {
             provider,
             query: normalizedQuery,
+            effectiveQuery: queryResolution.effectiveQuery,
+            appliedLocationFallback: queryResolution.appliedLocationFallback,
+            notes: queryResolution.notes,
             latencyMs,
             normalized,
             raw,
@@ -113,15 +122,21 @@ export class SearchService {
     extractLimit = 3,
   ): Promise<SearchExtractComparisonResult> {
     const normalizedQuery = this.normalizeQuery(query);
+    const queryResolution = resolveSearchQuery(normalizedQuery);
     const startedAt = Date.now();
 
     this.logger.log(
-      `[compare] Starting search-then-extract comparison for query: ${this.formatQueryForLog(normalizedQuery)}`,
+      `[compare] Starting search-then-extract comparison for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
     );
 
     const providers = await Promise.all(
       SEARCH_PROVIDERS.map((provider) =>
-        this.compareProvider(provider, normalizedQuery, searchLimit, extractLimit),
+        this.compareProvider(
+          provider,
+          queryResolution.effectiveQuery,
+          searchLimit,
+          extractLimit,
+        ),
       ),
     );
 
@@ -133,6 +148,9 @@ export class SearchService {
 
     return {
       query: normalizedQuery,
+      effectiveQuery: queryResolution.effectiveQuery,
+      appliedLocationFallback: queryResolution.appliedLocationFallback,
+      notes: queryResolution.notes,
       searchLimit,
       extractLimit,
       totalLatencyMs,
@@ -472,7 +490,7 @@ export class SearchService {
     return raw.results.map((result) => ({
       title: result.title,
       url: result.url,
-      snippet: result.content,
+      snippet: this.normalizeSearchSnippet(result.content),
       score: result.score,
       publishedAt: result.publishedDate || null,
     }));
@@ -484,7 +502,7 @@ export class SearchService {
     return raw.results.map((result) => ({
       title: result.title ?? result.url,
       url: result.url,
-      snippet: result.text ?? '',
+      snippet: this.normalizeSearchSnippet(result.text ?? ''),
       score: result.score ?? null,
       publishedAt: result.publishedDate ?? null,
     }));
@@ -591,6 +609,20 @@ export class SearchService {
     }
 
     return normalizedQuery;
+  }
+
+  private normalizeSearchSnippet(snippet: string): string {
+    const cleanedSnippet = cleanContent(snippet);
+
+    if (!cleanedSnippet) {
+      return '';
+    }
+
+    if (cleanedSnippet.length <= 420) {
+      return cleanedSnippet;
+    }
+
+    return `${cleanedSnippet.slice(0, 417).trimEnd()}...`;
   }
 
   private getErrorMessage(error: unknown): string {

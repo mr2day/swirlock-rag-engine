@@ -34,25 +34,36 @@ export class ContentExcerptService {
   ]);
 
   private readonly boilerplatePatterns = [
-    /advertisement/gi,
-    /privacy\s*(policy|settings|legal|notice)/gi,
-    /terms of use/gi,
-    /sign in/gi,
-    /cookie notice/gi,
-    /adchoices/gi,
-    /feedback/gi,
-    /careers/gi,
-    /newsletter/gi,
-    /follow us/gi,
-    /community guidelines/gi,
-    /all rights reserved/gi,
-    /copyright/gi,
-    /toggle navigation/gi,
-    /use current location/gi,
-    /recent locations/gi,
-    /learn more/gi,
-    /read more/gi,
-    /more information/gi,
+    /advertisement/i,
+    /privacy\s*(policy|settings|legal|notice)/i,
+    /privacy promise/i,
+    /terms of use/i,
+    /sign in/i,
+    /cookie notice/i,
+    /adchoices/i,
+    /feedback/i,
+    /careers/i,
+    /newsletter/i,
+    /follow us/i,
+    /community guidelines/i,
+    /all rights reserved/i,
+    /copyright/i,
+    /toggle navigation/i,
+    /use current location/i,
+    /recent locations/i,
+    /learn more/i,
+    /read more/i,
+    /more information/i,
+    /around the globe/i,
+    /top stories/i,
+    /featured stories/i,
+    /trending (now|today)/i,
+    /news & features/i,
+    /for business/i,
+    /no results found/i,
+    /weather near/i,
+    /contact us/i,
+    /subscription services/i,
   ];
 
   buildExcerpt(content: string, query: string): string {
@@ -82,7 +93,7 @@ export class ContentExcerptService {
       .sort((left, right) => left.index - right.index)
       .map((entry) => entry.block);
 
-    return this.limitExcerpt(selectedBlocks.join(' '), 1200);
+    return this.limitExcerpt(selectedBlocks.join(' '), 900);
   }
 
   private extractCandidateBlocks(content: string): string[] {
@@ -146,21 +157,51 @@ export class ContentExcerptService {
       score += 6;
     }
 
-    if (/\b\d+\s?(°|°f|°c|f|c|mph|km\/h|%|mb|in)\b/i.test(lower)) {
-      score += 16;
+    if (/\b\d+\s?(°|°f|°c|f|c|mph|km\/h|%|mb|in)\b/i.test(block)) {
+      score += 18;
     }
 
-    if (/\b(current weather|forecast|humidity|temperature|feels like|wind|dew point|pressure|visibility)\b/i.test(lower)) {
-      score += 14;
+    if (
+      /\b(current weather|current weather conditions|humidity|temperature|feels like|realfeel|wind|dew point|pressure|visibility|cloud cover)\b/i.test(
+        lower,
+      )
+    ) {
+      score += 24;
+    }
+
+    if (
+      /\b(currently|temperature of|realfeel|humidity|dew point|visibility|partly sunny|mostly cloudy|sunny|clear)\b/i.test(
+        lower,
+      )
+    ) {
+      score += 18;
     }
 
     if (/\b(today|tonight|hourly|daily|now|last update|as of)\b/i.test(lower)) {
       score += 8;
     }
 
+    if (
+      /\b(wildfire|tornado|astronomy|travel|sports|business|climate|health|featured stories|top stories|trending|newsletter)\b/i.test(
+        lower,
+      )
+    ) {
+      score -= 18;
+    }
+
+    if (
+      /\b(weather channel is the world's most accurate forecaster|accuweather founder|download app)\b/i.test(
+        lower,
+      )
+    ) {
+      score -= 24;
+    }
+
     if (queryTerms.length > 0) {
       score += queryTerms.reduce((total, term) => {
-        const matches = lower.match(new RegExp(`\\b${this.escapeForRegex(term)}\\b`, 'g'));
+        const matches = lower.match(
+          new RegExp(`\\b${this.escapeForRegex(term)}\\b`, 'g'),
+        );
 
         return total + (matches ? matches.length * 5 : 0);
       }, 0);
@@ -175,10 +216,18 @@ export class ContentExcerptService {
       score -= 6;
     }
 
-    const colonCount = (block.match(/:/g)?.length ?? 0);
+    const colonCount = block.match(/:/g)?.length ?? 0;
 
     if (colonCount > 6) {
       score -= 4;
+    }
+
+    if (
+      block.length < 500 &&
+      !/[.!?]/.test(block) &&
+      !/\b(current|temperature|humidity|wind|forecast)\b/i.test(lower)
+    ) {
+      score -= 8;
     }
 
     return score;
@@ -189,7 +238,7 @@ export class ContentExcerptService {
       return 'No extracted content returned.';
     }
 
-    return this.limitExcerpt(content, 1200);
+    return this.limitExcerpt(content, 900);
   }
 
   private limitExcerpt(content: string, maxLength: number): string {
