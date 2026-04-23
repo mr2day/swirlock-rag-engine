@@ -39,6 +39,18 @@ export interface SearchStageResult extends ProviderStageMetadata {
   resolvedSearchType: string | null;
 }
 
+export interface WeatherSnapshot {
+  location: string | null;
+  observationTime: string | null;
+  condition: string | null;
+  temperature: string | null;
+  feelsLike: string | null;
+  humidity: string | null;
+  wind: string | null;
+  high: string | null;
+  low: string | null;
+}
+
 export interface ExtractedDocument {
   title: string;
   url: string;
@@ -47,6 +59,8 @@ export interface ExtractedDocument {
   content: string;
   contentLength: number;
   excerpt: string;
+  providerSummary: string | null;
+  weatherSnapshot: WeatherSnapshot | null;
 }
 
 export interface ExtractStageResult extends ProviderStageMetadata {

@@ -722,6 +722,31 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       }
 
       function renderExtractedDocuments(documents, failedSources) {
+        function renderWeatherSnapshot(document) {
+          if (!document || !document.weatherSnapshot) {
+            return '';
+          }
+
+          const snapshot = document.weatherSnapshot;
+          const items = [
+            snapshot.location,
+            snapshot.observationTime ? 'as of ' + snapshot.observationTime : '',
+            snapshot.condition,
+            snapshot.temperature ? 'temp: ' + snapshot.temperature : '',
+            snapshot.feelsLike ? 'feels like: ' + snapshot.feelsLike : '',
+            snapshot.humidity ? 'humidity: ' + snapshot.humidity : '',
+            snapshot.wind ? 'wind: ' + snapshot.wind : '',
+            snapshot.high ? 'high: ' + snapshot.high : '',
+            snapshot.low ? 'low: ' + snapshot.low : '',
+          ].filter(Boolean);
+
+          if (items.length === 0) {
+            return '';
+          }
+
+          return '<p>' + escapeHtml(items.join(' | ')) + '</p>';
+        }
+
         const docMarkup =
           Array.isArray(documents) && documents.length > 0
             ? (
@@ -729,6 +754,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                   documents.slice(0, 2).map((document, index) =>
                     '<article class="list-item">' +
                       '<h4>' + escapeHtml(String(index + 1) + '. ' + document.title) + '</h4>' +
+                      renderWeatherSnapshot(document) +
                       '<div class="content-preview">' +
                         escapeHtml(makeExcerpt(document.excerpt || document.content || '')) +
                       '</div>' +
