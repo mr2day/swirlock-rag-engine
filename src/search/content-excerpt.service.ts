@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { cleanContent } from './content-cleaner';
 
 @Injectable()
 export class ContentExcerptService {
@@ -55,10 +56,11 @@ export class ContentExcerptService {
   ];
 
   buildExcerpt(content: string, query: string): string {
-    const blocks = this.extractCandidateBlocks(content);
+    const cleanedContent = cleanContent(content);
+    const blocks = this.extractCandidateBlocks(cleanedContent);
 
     if (blocks.length === 0) {
-      return this.fallbackExcerpt(content);
+      return this.fallbackExcerpt(cleanedContent);
     }
 
     const queryTerms = this.extractQueryTerms(query);
@@ -72,7 +74,7 @@ export class ContentExcerptService {
       .sort((left, right) => right.score - left.score);
 
     if (rankedBlocks.length === 0) {
-      return this.fallbackExcerpt(content);
+      return this.fallbackExcerpt(cleanedContent);
     }
 
     const selectedBlocks = rankedBlocks
@@ -86,25 +88,10 @@ export class ContentExcerptService {
   private extractCandidateBlocks(content: string): string[] {
     return content
       .split(/\n{2,}/)
-      .map((block) => this.cleanBlock(block))
+      .map((block) => block.trim())
       .filter((block) => block.length >= 40)
       .filter((block) => !this.isMostlyBoilerplate(block))
       .slice(0, 120);
-  }
-
-  private cleanBlock(block: string): string {
-    let cleaned = block;
-
-    cleaned = cleaned.replace(/!\[[^\]]*]\([^)]*\)/g, ' ');
-    cleaned = cleaned.replace(/\[([^\]]+)]\(([^)]*)\)/g, '$1');
-    cleaned = cleaned.replace(/https?:\/\/\S+/g, ' ');
-    cleaned = cleaned.replace(/\[(Image|Video)\s+\d+:[^\]]*]/gi, ' ');
-    cleaned = cleaned.replace(/\[(Image|Video)\s+\d+]/gi, ' ');
-    cleaned = cleaned.replace(/[|]{2,}/g, ' ');
-    cleaned = cleaned.replace(/[#*_`>~]/g, ' ');
-    cleaned = cleaned.replace(/\s+/g, ' ').trim();
-
-    return cleaned;
   }
 
   private isMostlyBoilerplate(block: string): boolean {
@@ -198,13 +185,11 @@ export class ContentExcerptService {
   }
 
   private fallbackExcerpt(content: string): string {
-    const normalized = this.cleanBlock(content);
-
-    if (!normalized) {
+    if (!content) {
       return 'No extracted content returned.';
     }
 
-    return this.limitExcerpt(normalized, 1200);
+    return this.limitExcerpt(content, 1200);
   }
 
   private limitExcerpt(content: string, maxLength: number): string {
