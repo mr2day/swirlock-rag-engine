@@ -411,7 +411,23 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         line-height: 1.45;
       }
 
+      .content-preview {
+        margin-top: 0.55rem;
+        padding: 0.8rem 0.9rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: rgba(0, 0, 0, 0.18);
+        color: var(--text);
+        font-family: Consolas, "Cascadia Code", "Courier New", monospace;
+        font-size: 0.84rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+
       .doc-meta {
+        margin-top: 0.55rem;
         color: var(--muted);
         font-size: 0.8rem;
       }
@@ -620,6 +636,20 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         return Number(value).toFixed(3);
       }
 
+      function makeExcerpt(value, limit = 1200) {
+        const text = String(value || '').trim();
+
+        if (!text) {
+          return 'No extracted content returned.';
+        }
+
+        if (text.length <= limit) {
+          return text;
+        }
+
+        return text.slice(0, limit - 3) + '...';
+      }
+
       function setLoadingState(isLoading) {
         searchButton.disabled = isLoading;
         compareButton.disabled = isLoading;
@@ -671,14 +701,17 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                   documents.slice(0, 2).map((document, index) =>
                     '<article class="list-item">' +
                       '<h4>' + escapeHtml(String(index + 1) + '. ' + document.title) + '</h4>' +
+                      '<div class="content-preview">' +
+                        escapeHtml(makeExcerpt(document.content || document.preview || '')) +
+                      '</div>' +
                       '<div class="doc-meta">' +
                         '<a href="' + escapeHtml(document.url) + '" target="_blank" rel="noreferrer noopener">' +
                           escapeHtml(document.url) +
                         '</a>' +
+                        (document.publishedAt ? ' | published: ' + escapeHtml(document.publishedAt) : '') +
                         ' | chars: ' + escapeHtml(formatNumber(document.contentLength)) +
                         ' | score: ' + escapeHtml(formatScore(document.score)) +
                       '</div>' +
-                      '<p>' + escapeHtml(document.preview || 'No extracted preview returned.') + '</p>' +
                     '</article>'
                   ).join('') +
                 '</div>'
