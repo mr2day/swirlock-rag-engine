@@ -13,6 +13,7 @@ import {
   type TavilySearchResponse,
 } from '@tavily/core';
 import Exa, { type SearchResponse } from 'exa-js';
+import { ContentExcerptService } from './content-excerpt.service';
 import type {
   ExtractStageResult,
   ExtractedDocument,
@@ -40,7 +41,10 @@ export class SearchService {
 
   private tavilyClient: TavilyClient | null = null;
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly contentExcerptService: ContentExcerptService,
+  ) {}
 
   async search(
     query: string,
@@ -212,6 +216,7 @@ export class SearchService {
     const documents = this.normalizeTavilyExtractedDocuments(
       extractRaw,
       searchRaw.results,
+      query,
     );
 
     const extractStage: ExtractStageResult = {
@@ -287,7 +292,11 @@ export class SearchService {
         ? await this.extractWithExa(urlsToExtract)
         : this.createEmptyExaExtractResponse();
     const extractLatencyMs = Date.now() - extractStartedAt;
-    const documents = this.normalizeExaExtractedDocuments(extractRaw, topResults);
+    const documents = this.normalizeExaExtractedDocuments(
+      extractRaw,
+      topResults,
+      query,
+    );
 
     const extractedUrls = new Set(documents.map((document) => document.url));
     const failedSources = urlsToExtract
@@ -496,6 +505,7 @@ export class SearchService {
   private normalizeTavilyExtractedDocuments(
     raw: TavilyExtractResponse,
     searchResults: TavilySearchResponse['results'],
+    query: string,
   ): ExtractedDocument[] {
     const searchResultsByUrl = new Map(
       searchResults.map((result) => [result.url, result] as const),
@@ -512,7 +522,7 @@ export class SearchService {
         score: searchResult?.score ?? null,
         content,
         contentLength: content.length,
-        preview: this.makePreview(content),
+        excerpt: this.contentExcerptService.buildExcerpt(content, query),
       };
     });
   }
@@ -520,6 +530,7 @@ export class SearchService {
   private normalizeExaExtractedDocuments(
     raw: ExaTextSearchResponse,
     searchResults: NormalizedSearchResult[],
+    query: string,
   ): ExtractedDocument[] {
     const searchResultsByUrl = new Map(
       searchResults.map((result) => [result.url, result] as const),
@@ -536,7 +547,7 @@ export class SearchService {
         score: result.score ?? searchResult?.score ?? null,
         content,
         contentLength: content.length,
-        preview: this.makePreview(content),
+        excerpt: this.contentExcerptService.buildExcerpt(content, query),
       };
     });
   }
@@ -580,16 +591,6 @@ export class SearchService {
     }
 
     return normalizedQuery;
-  }
-
-  private makePreview(content: string): string {
-    const normalized = content.replace(/\s+/g, ' ').trim();
-
-    if (normalized.length <= 320) {
-      return normalized;
-    }
-
-    return `${normalized.slice(0, 317)}...`;
   }
 
   private getErrorMessage(error: unknown): string {

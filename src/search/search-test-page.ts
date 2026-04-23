@@ -702,7 +702,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                     '<article class="list-item">' +
                       '<h4>' + escapeHtml(String(index + 1) + '. ' + document.title) + '</h4>' +
                       '<div class="content-preview">' +
-                        escapeHtml(makeExcerpt(document.content || document.preview || '')) +
+                        escapeHtml(makeExcerpt(document.excerpt || document.content || '')) +
                       '</div>' +
                       '<div class="doc-meta">' +
                         '<a href="' + escapeHtml(document.url) + '" target="_blank" rel="noreferrer noopener">' +

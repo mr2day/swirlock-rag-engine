@@ -43,7 +43,7 @@ export interface ExtractedDocument {
   score: number | null;
   content: string;
   contentLength: number;
-  preview: string;
+  excerpt: string;
 }
 
 export interface ExtractStageResult extends ProviderStageMetadata {
