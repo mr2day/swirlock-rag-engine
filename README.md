@@ -115,6 +115,8 @@ The result should be suitable for downstream context assembly, answer generation
 
 The canonical ecosystem architecture and cross-service contracts are maintained outside this repository in the `swirlock-chatbot-contracts` repository.
 
+That repository is the single source of truth for cross-service contracts.
+
 This repository should stay focused on the RAG Engine implementation and its own internal design.
 
 ## Current Status
@@ -124,7 +126,6 @@ This repository is still at an early implementation stage.
 At the moment, it contains:
 
 - a NestJS service scaffold
-- an early RAG contract draft in `src/contract/rag-engine.contract.ts`
 - the initial package setup for future retrieval integrations
 
 The production retrieval pipeline is not fully implemented yet.
