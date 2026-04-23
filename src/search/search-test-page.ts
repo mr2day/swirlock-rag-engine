@@ -6,15 +6,23 @@ export const searchTestPageHtml = `<!DOCTYPE html>
     <title>Swirlock Search Test</title>
     <style>
       :root {
-        color-scheme: light;
-        --bg: #f4f1e8;
-        --panel: #fffdf8;
-        --border: #d7d0c2;
-        --text: #1e1b16;
-        --muted: #6b6254;
-        --accent: #2f6fed;
-        --accent-hover: #2456b8;
-        --danger: #b42318;
+        color-scheme: dark;
+        --bg: #111418;
+        --bg-accent: #1a2028;
+        --panel: #181c22;
+        --panel-elevated: #1f242d;
+        --panel-muted: #252b36;
+        --border: #313846;
+        --border-strong: #40495b;
+        --text: #d4d4d4;
+        --muted: #9ca3af;
+        --heading: #f3f4f6;
+        --accent: #0e639c;
+        --accent-hover: #1177bb;
+        --accent-soft: rgba(14, 99, 156, 0.16);
+        --success: #89d185;
+        --danger: #f48771;
+        --shadow: rgba(0, 0, 0, 0.34);
       }
 
       * {
@@ -23,56 +31,91 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       body {
         margin: 0;
-        font-family: Georgia, "Times New Roman", serif;
+        min-height: 100vh;
+        font-family: "Segoe UI", system-ui, sans-serif;
         background:
-          radial-gradient(circle at top left, #fff6db 0, transparent 28rem),
-          linear-gradient(180deg, #f8f3e8 0%, var(--bg) 100%);
+          radial-gradient(circle at top left, rgba(14, 99, 156, 0.22) 0, transparent 22rem),
+          radial-gradient(circle at top right, rgba(45, 212, 191, 0.08) 0, transparent 18rem),
+          linear-gradient(180deg, #0f1216 0%, var(--bg) 100%);
         color: var(--text);
       }
 
       .page {
-        width: min(960px, calc(100vw - 2rem));
-        margin: 2rem auto;
-        padding: 1.5rem;
+        width: min(1100px, calc(100vw - 2rem));
+        margin: 2.25rem auto;
+        padding: 1rem;
       }
 
       .panel {
-        background: color-mix(in srgb, var(--panel) 92%, white);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+          var(--panel);
         border: 1px solid var(--border);
-        border-radius: 18px;
-        box-shadow: 0 18px 50px rgba(48, 36, 16, 0.08);
+        border-radius: 16px;
+        box-shadow: 0 24px 60px var(--shadow);
         overflow: hidden;
       }
 
       .hero {
-        padding: 1.5rem 1.5rem 1rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        align-items: flex-start;
+        justify-content: space-between;
+        padding: 1.5rem;
         border-bottom: 1px solid var(--border);
-        background: linear-gradient(135deg, rgba(255, 244, 210, 0.8), rgba(255, 255, 255, 0.9));
+        background:
+          linear-gradient(135deg, rgba(14, 99, 156, 0.15), transparent 55%),
+          linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0));
       }
 
       h1 {
         margin: 0 0 0.5rem;
-        font-size: clamp(1.8rem, 3vw, 2.6rem);
+        color: var(--heading);
+        font-size: clamp(1.9rem, 3vw, 2.8rem);
         line-height: 1.05;
+        letter-spacing: -0.03em;
       }
 
       .subtitle {
         margin: 0;
         max-width: 52rem;
         color: var(--muted);
-        font-size: 1rem;
+        font-size: 0.98rem;
+        line-height: 1.55;
+      }
+
+      .hero-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 2rem;
+        padding: 0.35rem 0.75rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.03);
+        color: #c8d1dc;
+        font-size: 0.85rem;
+        white-space: nowrap;
       }
 
       .content {
         display: grid;
-        gap: 1.25rem;
+        gap: 1.4rem;
         padding: 1.5rem;
       }
 
       label {
         display: block;
-        margin-bottom: 0.45rem;
-        font-weight: 700;
+        margin-bottom: 0.5rem;
+        color: #cdd6e3;
+        font-size: 0.9rem;
+        font-weight: 600;
+        letter-spacing: 0.01em;
       }
 
       textarea,
@@ -85,15 +128,32 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       select {
         width: 100%;
         border: 1px solid var(--border);
-        border-radius: 12px;
+        border-radius: 10px;
         padding: 0.9rem 1rem;
-        background: #fff;
+        background: var(--panel-elevated);
         color: var(--text);
+        transition:
+          border-color 120ms ease,
+          box-shadow 120ms ease,
+          background 120ms ease;
+      }
+
+      textarea::placeholder {
+        color: #7d8593;
+      }
+
+      textarea:focus,
+      select:focus {
+        outline: none;
+        border-color: #3794ff;
+        background: #1d2330;
+        box-shadow: 0 0 0 1px #3794ff, 0 0 0 4px rgba(55, 148, 255, 0.14);
       }
 
       textarea {
-        min-height: 9rem;
+        min-height: 10rem;
         resize: vertical;
+        line-height: 1.55;
       }
 
       .controls {
@@ -111,15 +171,18 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       button {
         border: 0;
-        border-radius: 999px;
-        padding: 0.8rem 1.3rem;
+        border-radius: 10px;
+        padding: 0.8rem 1.2rem;
         background: var(--accent);
         color: white;
-        font-weight: 700;
+        font-weight: 600;
+        letter-spacing: 0.01em;
         cursor: pointer;
         transition:
           transform 120ms ease,
-          background 120ms ease;
+          background 120ms ease,
+          box-shadow 120ms ease;
+        box-shadow: 0 10px 25px rgba(14, 99, 156, 0.28);
       }
 
       button:hover:not(:disabled) {
@@ -138,27 +201,62 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         font-size: 0.95rem;
       }
 
+      .status.success {
+        color: var(--success);
+      }
+
       .status.error {
         color: var(--danger);
       }
 
       pre {
         margin: 0;
-        padding: 1rem;
-        min-height: 20rem;
+        padding: 1.1rem 1.2rem;
+        min-height: 22rem;
         overflow: auto;
-        border-radius: 14px;
-        border: 1px solid #1f26331a;
-        background: #161a22;
-        color: #dce6f7;
-        font-family: Consolas, "Courier New", monospace;
+        border-radius: 12px;
+        border: 1px solid var(--border);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0)),
+          #11161d;
+        color: #d4d4d4;
+        font-family: Consolas, "Cascadia Code", "Courier New", monospace;
         font-size: 0.9rem;
         line-height: 1.45;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
       }
 
       .hint {
         color: var(--muted);
         font-size: 0.95rem;
+        margin: 0;
+        padding: 0.9rem 1rem;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--panel-muted);
+      }
+
+      code {
+        padding: 0.15rem 0.4rem;
+        border: 1px solid var(--border-strong);
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #d7ba7d;
+        font-family: Consolas, "Cascadia Code", "Courier New", monospace;
+        font-size: 0.92em;
+      }
+
+      .results-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        margin-bottom: 0.5rem;
+      }
+
+      .results-caption {
+        color: var(--muted);
+        font-size: 0.85rem;
       }
 
       @media (min-width: 700px) {
@@ -167,17 +265,38 @@ export const searchTestPageHtml = `<!DOCTYPE html>
           align-items: end;
         }
       }
+
+      @media (max-width: 699px) {
+        .page {
+          margin: 1rem auto;
+          width: min(100vw, calc(100vw - 1rem));
+          padding: 0.5rem;
+        }
+
+        .hero,
+        .content {
+          padding: 1rem;
+        }
+      }
     </style>
   </head>
   <body>
     <main class="page">
       <section class="panel">
         <header class="hero">
-          <h1>Swirlock Search Test</h1>
-          <p class="subtitle">
-            Diagnostic UI for the local search route. Enter a query, choose a
-            provider, and inspect the returned JSON payload.
-          </p>
+          <div>
+            <h1>Swirlock Search Test</h1>
+            <p class="subtitle">
+              Diagnostic UI for the local search route. Enter a query, choose a
+              provider, and inspect the returned JSON payload.
+            </p>
+          </div>
+
+          <div class="hero-meta">
+            <span class="badge">/dev/search</span>
+            <span class="badge">Tavily + Exa</span>
+            <span class="badge">JSON inspection</span>
+          </div>
         </header>
 
         <section class="content">
@@ -211,7 +330,10 @@ export const searchTestPageHtml = `<!DOCTYPE html>
           </p>
 
           <div>
-            <label for="result">Response</label>
+            <div class="results-header">
+              <label for="result">Response</label>
+              <span class="results-caption">Raw JSON from the diagnostic endpoint</span>
+            </div>
             <pre id="result">No response yet.</pre>
           </div>
         </section>
@@ -265,7 +387,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
           }
 
           statusField.textContent = 'Search completed.';
-          statusField.className = 'status';
+          statusField.className = 'status success';
           resultField.textContent = JSON.stringify(payload, null, 2);
         } catch (error) {
           const message =
