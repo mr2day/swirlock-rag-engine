@@ -39,6 +39,19 @@ export interface SearchStageResult extends ProviderStageMetadata {
   resolvedSearchType: string | null;
 }
 
+export type StructuredSummaryType = 'weather' | 'market-price' | 'sports-score';
+
+export interface StructuredSummaryField {
+  label: string;
+  value: string;
+}
+
+export interface StructuredSummary {
+  type: StructuredSummaryType;
+  heading: string | null;
+  fields: StructuredSummaryField[];
+}
+
 export interface WeatherSnapshot {
   location: string | null;
   observationTime: string | null;
@@ -60,6 +73,7 @@ export interface ExtractedDocument {
   contentLength: number;
   excerpt: string;
   providerSummary: string | null;
+  structuredSummary: StructuredSummary | null;
   weatherSnapshot: WeatherSnapshot | null;
 }
 

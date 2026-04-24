@@ -722,7 +722,26 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       }
 
       function renderExtractedDocuments(documents, failedSources) {
-        function renderWeatherSnapshot(document) {
+        function renderStructuredSummary(document) {
+          if (document && document.structuredSummary && Array.isArray(document.structuredSummary.fields)) {
+            const summary = document.structuredSummary;
+            const items = [];
+
+            if (summary.heading) {
+              items.push(summary.heading);
+            }
+
+            summary.fields.forEach((field) => {
+              if (field && field.label && field.value) {
+                items.push(field.label + ': ' + field.value);
+              }
+            });
+
+            if (items.length > 0) {
+              return '<p>' + escapeHtml(items.join(' | ')) + '</p>';
+            }
+          }
+
           if (!document || !document.weatherSnapshot) {
             return '';
           }
@@ -754,7 +773,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
                   documents.slice(0, 2).map((document, index) =>
                     '<article class="list-item">' +
                       '<h4>' + escapeHtml(String(index + 1) + '. ' + document.title) + '</h4>' +
-                      renderWeatherSnapshot(document) +
+                      renderStructuredSummary(document) +
                       '<div class="content-preview">' +
                         escapeHtml(makeExcerpt(document.excerpt || document.content || '')) +
                       '</div>' +

@@ -18,6 +18,7 @@ import { cleanContent } from './content-cleaner';
 import { rankSearchResults } from './search-result-ranker';
 import {
   resolveSearchQuery,
+  type SearchIntent,
   type SearchQueryResolution,
 } from './search-query-resolver';
 import type {
@@ -29,6 +30,7 @@ import type {
   SearchExtractComparisonResult,
   SearchProvider,
   SearchStageResult,
+  StructuredSummary,
   WeatherSnapshot,
 } from './search.types';
 import { SEARCH_PROVIDERS } from './search.types';
@@ -71,6 +73,38 @@ const EXA_CURRENT_WEATHER_SUMMARY_SCHEMA = {
     low: { type: 'string' },
   },
   required: ['temperature'],
+} satisfies Record<string, unknown>;
+
+const EXA_MARKET_PRICE_SUMMARY_SCHEMA = {
+  type: 'object',
+  properties: {
+    asset: { type: 'string' },
+    quoteTime: { type: 'string' },
+    marketStatus: { type: 'string' },
+    price: { type: 'string' },
+    currency: { type: 'string' },
+    change: { type: 'string' },
+    percentChange: { type: 'string' },
+    exchange: { type: 'string' },
+    dayRange: { type: 'string' },
+  },
+  required: ['price'],
+} satisfies Record<string, unknown>;
+
+const EXA_SPORTS_SCORE_SUMMARY_SCHEMA = {
+  type: 'object',
+  properties: {
+    event: { type: 'string' },
+    competition: { type: 'string' },
+    status: { type: 'string' },
+    score: { type: 'string' },
+    teamA: { type: 'string' },
+    teamB: { type: 'string' },
+    winner: { type: 'string' },
+    period: { type: 'string' },
+    eventTime: { type: 'string' },
+  },
+  required: ['status'],
 } satisfies Record<string, unknown>;
 
 @Injectable()
@@ -239,7 +273,9 @@ export class SearchService {
     } catch (error) {
       const message = this.getErrorMessage(error);
 
-      this.logger.error(`[compare:${provider}] Provider comparison failed: ${message}`);
+      this.logger.error(
+        `[compare:${provider}] Provider comparison failed: ${message}`,
+      );
 
       return {
         provider,
@@ -273,7 +309,9 @@ export class SearchService {
       this.normalizeTavilyResults(searchRaw),
       queryResolution.executionHints,
     );
-    const urlsToExtract = topResults.slice(0, extractLimit).map((result) => result.url);
+    const urlsToExtract = topResults
+      .slice(0, extractLimit)
+      .map((result) => result.url);
 
     const searchStage: SearchStageResult = {
       latencyMs: searchLatencyMs,
@@ -305,6 +343,7 @@ export class SearchService {
       extractRaw,
       searchRaw.results,
       query,
+      queryResolution.executionHints.intent,
     );
 
     const extractStage: ExtractStageResult = {
@@ -360,7 +399,9 @@ export class SearchService {
       this.normalizeExaResults(searchRaw),
       queryResolution.executionHints,
     );
-    const urlsToExtract = topResults.slice(0, extractLimit).map((result) => result.url);
+    const urlsToExtract = topResults
+      .slice(0, extractLimit)
+      .map((result) => result.url);
 
     const searchStage: SearchStageResult = {
       latencyMs: searchLatencyMs,
@@ -392,6 +433,7 @@ export class SearchService {
       extractRaw,
       topResults,
       query,
+      queryResolution.executionHints.intent,
     );
 
     const extractedUrls = new Set(documents.map((document) => document.url));
@@ -461,13 +503,14 @@ export class SearchService {
     }
 
     return tavilyClient.search(query, {
-      searchDepth:
-        queryResolution.executionHints.intent === 'current-weather'
-          ? 'advanced'
-          : 'basic',
+      searchDepth: queryResolution.executionHints.forceFreshContent
+        ? 'advanced'
+        : 'basic',
+      topic: queryResolution.executionHints.tavilyTopic,
       maxResults,
-      chunksPerSource:
-        queryResolution.executionHints.intent === 'current-weather' ? 1 : undefined,
+      chunksPerSource: queryResolution.executionHints.forceFreshContent
+        ? 1
+        : undefined,
       country: queryResolution.executionHints.tavilyCountry ?? undefined,
       excludeDomains:
         queryResolution.executionHints.excludeDomains.length > 0
@@ -493,9 +536,9 @@ export class SearchService {
 
     return tavilyClient.search(query, {
       searchDepth: 'advanced',
+      topic: queryResolution.executionHints.tavilyTopic,
       maxResults,
-      chunksPerSource:
-        queryResolution.executionHints.intent === 'current-weather' ? 1 : 3,
+      chunksPerSource: queryResolution.executionHints.forceFreshContent ? 1 : 3,
       country: queryResolution.executionHints.tavilyCountry ?? undefined,
       excludeDomains:
         queryResolution.executionHints.excludeDomains.length > 0
@@ -524,8 +567,7 @@ export class SearchService {
       extractDepth: 'advanced',
       format: 'text',
       query,
-      chunksPerSource:
-        queryResolution.executionHints.intent === 'current-weather' ? 2 : 3,
+      chunksPerSource: queryResolution.executionHints.forceFreshContent ? 2 : 3,
       includeUsage: true,
     });
   }
@@ -540,6 +582,7 @@ export class SearchService {
     return exaClient.search(query, {
       numResults,
       type: 'auto',
+      category: queryResolution.executionHints.exaCategory ?? undefined,
       userLocation: queryResolution.executionHints.exaUserLocation ?? undefined,
       excludeDomains:
         queryResolution.executionHints.excludeDomains.length > 0
@@ -551,7 +594,9 @@ export class SearchService {
           maxCharacters: 420,
         },
         filterEmptyResults: true,
-        maxAgeHours: queryResolution.executionHints.forceFreshContent ? 0 : undefined,
+        maxAgeHours: queryResolution.executionHints.forceFreshContent
+          ? 0
+          : undefined,
       },
     });
   }
@@ -566,6 +611,7 @@ export class SearchService {
     return exaClient.search(query, {
       numResults,
       type: 'auto',
+      category: queryResolution.executionHints.exaCategory ?? undefined,
       userLocation: queryResolution.executionHints.exaUserLocation ?? undefined,
       excludeDomains:
         queryResolution.executionHints.excludeDomains.length > 0
@@ -577,7 +623,9 @@ export class SearchService {
           maxCharacters: 420,
         },
         filterEmptyResults: true,
-        maxAgeHours: queryResolution.executionHints.forceFreshContent ? 0 : undefined,
+        maxAgeHours: queryResolution.executionHints.forceFreshContent
+          ? 0
+          : undefined,
       },
     });
   }
@@ -592,31 +640,28 @@ export class SearchService {
     const response = await exaClient.getContents(urls, {
       text: {
         maxCharacters:
-          queryResolution.executionHints.intent === 'current-weather' ? 1800 : 2600,
+          queryResolution.executionHints.intent === 'current-weather'
+            ? 1800
+            : 2600,
         verbosity:
           queryResolution.executionHints.intent === 'current-weather'
             ? 'compact'
             : undefined,
         excludeSections:
-          queryResolution.executionHints.intent === 'current-weather'
+          queryResolution.executionHints.intent !== 'general'
             ? ['navigation', 'footer', 'sidebar', 'metadata', 'banner']
             : undefined,
       },
       highlights: {
         query,
         maxCharacters:
-          queryResolution.executionHints.intent === 'current-weather' ? 900 : 1200,
+          queryResolution.executionHints.intent !== 'general' ? 900 : 1200,
       },
-      summary:
-        queryResolution.executionHints.intent === 'current-weather'
-          ? {
-              query:
-                'Extract the current weather conditions only. Return current temperature, feels like, humidity, wind, condition, local observation time, and today high/low if present.',
-              schema: EXA_CURRENT_WEATHER_SUMMARY_SCHEMA,
-            }
-          : undefined,
+      summary: this.getExaSummaryRequest(queryResolution.executionHints.intent),
       filterEmptyResults: true,
-      maxAgeHours: queryResolution.executionHints.forceFreshContent ? 0 : undefined,
+      maxAgeHours: queryResolution.executionHints.forceFreshContent
+        ? 0
+        : undefined,
     });
 
     return response as ExaExtractSearchResponse;
@@ -682,6 +727,7 @@ export class SearchService {
     raw: TavilyExtractResponse,
     searchResults: TavilySearchResponse['results'],
     query: string,
+    intent: SearchIntent,
   ): ExtractedDocument[] {
     const searchResultsByUrl = new Map(
       searchResults.map((result) => [result.url, result] as const),
@@ -698,8 +744,13 @@ export class SearchService {
         score: searchResult?.score ?? null,
         content,
         contentLength: content.length,
-        excerpt: this.contentExcerptService.buildExcerpt(content, query),
+        excerpt: this.contentExcerptService.buildExcerpt(
+          content,
+          query,
+          intent,
+        ),
         providerSummary: null,
+        structuredSummary: null,
         weatherSnapshot: null,
       };
     });
@@ -709,6 +760,7 @@ export class SearchService {
     raw: ExaExtractSearchResponse,
     searchResults: NormalizedSearchResult[],
     query: string,
+    intent: SearchIntent,
   ): ExtractedDocument[] {
     const searchResultsByUrl = new Map(
       searchResults.map((result) => [result.url, result] as const),
@@ -717,8 +769,16 @@ export class SearchService {
     return raw.results.map((result) => {
       const searchResult = searchResultsByUrl.get(result.url);
       const content = this.getExaContent(result);
-      const weatherSnapshot = this.parseWeatherSnapshot(result.summary);
+      const weatherSnapshot =
+        intent === 'current-weather'
+          ? this.parseWeatherSnapshot(result.summary)
+          : null;
       const providerSummary = this.normalizeProviderSummary(result.summary);
+      const structuredSummary = this.parseStructuredSummary(
+        intent,
+        result.summary,
+        weatherSnapshot,
+      );
 
       return {
         title: result.title ?? searchResult?.title ?? result.url,
@@ -731,9 +791,11 @@ export class SearchService {
           result.highlights,
           content,
           query,
-          weatherSnapshot,
+          intent,
+          structuredSummary,
         ),
         providerSummary,
+        structuredSummary,
         weatherSnapshot,
       };
     });
@@ -824,12 +886,14 @@ export class SearchService {
     highlights: string[] | null | undefined,
     content: string,
     query: string,
-    weatherSnapshot: WeatherSnapshot | null = null,
+    intent: SearchIntent,
+    structuredSummary: StructuredSummary | null = null,
   ): string {
-    const weatherSnapshotExcerpt = this.formatWeatherSnapshot(weatherSnapshot);
+    const structuredSummaryExcerpt =
+      this.formatStructuredSummary(structuredSummary);
 
-    if (weatherSnapshotExcerpt) {
-      return weatherSnapshotExcerpt;
+    if (structuredSummaryExcerpt) {
+      return structuredSummaryExcerpt;
     }
 
     const highlightsText = cleanContent(this.joinHighlights(highlights));
@@ -840,60 +904,217 @@ export class SearchService {
         : `${highlightsText.slice(0, 897).trimEnd()}...`;
     }
 
-    return this.contentExcerptService.buildExcerpt(content, query);
+    return this.contentExcerptService.buildExcerpt(content, query, intent);
   }
 
-  private normalizeProviderSummary(summary: string | null | undefined): string | null {
-    const normalizedSummary = cleanContent(summary ?? '');
+  private getExaSummaryRequest(
+    intent: SearchIntent,
+  ): { query: string; schema: Record<string, unknown> } | undefined {
+    switch (intent) {
+      case 'current-weather':
+        return {
+          query:
+            'Extract the current weather conditions only. Return current temperature, feels like, humidity, wind, condition, local observation time, and today high/low if present.',
+          schema: EXA_CURRENT_WEATHER_SUMMARY_SCHEMA,
+        };
+
+      case 'market-price':
+        return {
+          query:
+            'Extract the current market quote only. Return the asset name, current price, quote time, currency, change, percent change, market status, exchange, and day range if present.',
+          schema: EXA_MARKET_PRICE_SUMMARY_SCHEMA,
+        };
+
+      case 'sports-score':
+        return {
+          query:
+            'Extract the latest score update only. Return the event, competition, current status, score, both teams or players, winner if final, period or quarter if live, and event time if present.',
+          schema: EXA_SPORTS_SCORE_SUMMARY_SCHEMA,
+        };
+
+      default:
+        return undefined;
+    }
+  }
+
+  private normalizeProviderSummary(
+    summary: string | null | undefined,
+  ): string | null {
+    const normalizedSummary = typeof summary === 'string' ? summary.trim() : '';
 
     return normalizedSummary || null;
   }
 
-  private parseWeatherSnapshot(summary: string | null | undefined): WeatherSnapshot | null {
+  private parseStructuredSummary(
+    intent: SearchIntent,
+    summary: string | null | undefined,
+    weatherSnapshot: WeatherSnapshot | null,
+  ): StructuredSummary | null {
+    switch (intent) {
+      case 'current-weather':
+        return this.buildWeatherStructuredSummary(weatherSnapshot);
+      case 'market-price':
+        return this.parseMarketPriceStructuredSummary(summary);
+      case 'sports-score':
+        return this.parseSportsScoreStructuredSummary(summary);
+      default:
+        return null;
+    }
+  }
+
+  private parseWeatherSnapshot(
+    summary: string | null | undefined,
+  ): WeatherSnapshot | null {
+    const parsed = this.parseSummaryJson(summary);
+
+    if (!parsed) {
+      return null;
+    }
+
+    const snapshot: WeatherSnapshot = {
+      location: this.getOptionalString(parsed.location),
+      observationTime: this.getOptionalString(parsed.observationTime),
+      condition: this.getOptionalString(parsed.condition),
+      temperature: this.getOptionalString(parsed.temperature),
+      feelsLike: this.getOptionalString(parsed.feelsLike),
+      humidity: this.getOptionalString(parsed.humidity),
+      wind: this.getOptionalString(parsed.wind),
+      high: this.getOptionalString(parsed.high),
+      low: this.getOptionalString(parsed.low),
+    };
+
+    return Object.values(snapshot).some((value) => value !== null)
+      ? snapshot
+      : null;
+  }
+
+  private buildWeatherStructuredSummary(
+    snapshot: WeatherSnapshot | null,
+  ): StructuredSummary | null {
+    if (!snapshot) {
+      return null;
+    }
+
+    return this.createStructuredSummary('weather', snapshot.location, [
+      ['As of', snapshot.observationTime],
+      ['Condition', snapshot.condition],
+      ['Temperature', snapshot.temperature],
+      ['Feels like', snapshot.feelsLike],
+      ['Humidity', snapshot.humidity],
+      ['Wind', snapshot.wind],
+      [
+        'High / Low',
+        snapshot.high || snapshot.low
+          ? `${snapshot.high ?? 'n/a'} / ${snapshot.low ?? 'n/a'}`
+          : null,
+      ],
+    ]);
+  }
+
+  private parseMarketPriceStructuredSummary(
+    summary: string | null | undefined,
+  ): StructuredSummary | null {
+    const parsed = this.parseSummaryJson(summary);
+
+    if (!parsed) {
+      return null;
+    }
+
+    return this.createStructuredSummary(
+      'market-price',
+      this.getOptionalString(parsed.asset) ?? 'Current market quote',
+      [
+        ['As of', this.getOptionalString(parsed.quoteTime)],
+        ['Price', this.getOptionalString(parsed.price)],
+        ['Currency', this.getOptionalString(parsed.currency)],
+        ['Change', this.getOptionalString(parsed.change)],
+        ['Change %', this.getOptionalString(parsed.percentChange)],
+        ['Status', this.getOptionalString(parsed.marketStatus)],
+        ['Exchange', this.getOptionalString(parsed.exchange)],
+        ['Range', this.getOptionalString(parsed.dayRange)],
+      ],
+    );
+  }
+
+  private parseSportsScoreStructuredSummary(
+    summary: string | null | undefined,
+  ): StructuredSummary | null {
+    const parsed = this.parseSummaryJson(summary);
+
+    if (!parsed) {
+      return null;
+    }
+
+    const teamA = this.getOptionalString(parsed.teamA);
+    const teamB = this.getOptionalString(parsed.teamB);
+    const event =
+      this.getOptionalString(parsed.event) ??
+      [teamA, teamB]
+        .filter((value): value is string => Boolean(value))
+        .join(' vs ');
+
+    return this.createStructuredSummary(
+      'sports-score',
+      event || 'Score update',
+      [
+        ['Competition', this.getOptionalString(parsed.competition)],
+        ['Status', this.getOptionalString(parsed.status)],
+        ['Score', this.getOptionalString(parsed.score)],
+        ['Period', this.getOptionalString(parsed.period)],
+        ['Winner', this.getOptionalString(parsed.winner)],
+        ['Event time', this.getOptionalString(parsed.eventTime)],
+      ],
+    );
+  }
+
+  private createStructuredSummary(
+    type: StructuredSummary['type'],
+    heading: string | null,
+    entries: Array<[string, string | null]>,
+  ): StructuredSummary | null {
+    const fields = entries
+      .filter((entry): entry is [string, string] => Boolean(entry[1]))
+      .map(([label, value]) => ({
+        label,
+        value,
+      }));
+
+    if (!heading && fields.length === 0) {
+      return null;
+    }
+
+    return {
+      type,
+      heading,
+      fields,
+    };
+  }
+
+  private formatStructuredSummary(summary: StructuredSummary | null): string {
+    if (!summary) {
+      return '';
+    }
+
+    const segments = [
+      summary.heading,
+      ...summary.fields.map((field) => `${field.label}: ${field.value}`),
+    ].filter((segment): segment is string => Boolean(segment));
+
+    return segments.join('. ');
+  }
+
+  private parseSummaryJson(
+    summary: string | null | undefined,
+  ): Record<string, unknown> | null {
     if (!summary) {
       return null;
     }
 
     try {
-      const parsed = JSON.parse(summary) as Record<string, unknown>;
-
-      const snapshot: WeatherSnapshot = {
-        location: this.getOptionalString(parsed.location),
-        observationTime: this.getOptionalString(parsed.observationTime),
-        condition: this.getOptionalString(parsed.condition),
-        temperature: this.getOptionalString(parsed.temperature),
-        feelsLike: this.getOptionalString(parsed.feelsLike),
-        humidity: this.getOptionalString(parsed.humidity),
-        wind: this.getOptionalString(parsed.wind),
-        high: this.getOptionalString(parsed.high),
-        low: this.getOptionalString(parsed.low),
-      };
-
-      return Object.values(snapshot).some((value) => value !== null) ? snapshot : null;
+      return JSON.parse(summary) as Record<string, unknown>;
     } catch {
       return null;
     }
-  }
-
-  private formatWeatherSnapshot(snapshot: WeatherSnapshot | null): string {
-    if (!snapshot) {
-      return '';
-    }
-
-    const segments = [
-      snapshot.location,
-      snapshot.observationTime ? `As of ${snapshot.observationTime}` : null,
-      snapshot.condition,
-      snapshot.temperature ? `Temperature ${snapshot.temperature}` : null,
-      snapshot.feelsLike ? `Feels like ${snapshot.feelsLike}` : null,
-      snapshot.humidity ? `Humidity ${snapshot.humidity}` : null,
-      snapshot.wind ? `Wind ${snapshot.wind}` : null,
-      snapshot.high || snapshot.low
-        ? `High ${snapshot.high ?? 'n/a'} / Low ${snapshot.low ?? 'n/a'}`
-        : null,
-    ].filter((segment): segment is string => Boolean(segment));
-
-    return segments.join('. ');
   }
 
   private getOptionalString(value: unknown): string | null {
@@ -903,7 +1124,15 @@ export class SearchService {
 
     const normalized = value.trim();
 
-    return normalized ? normalized : null;
+    if (!normalized) {
+      return null;
+    }
+
+    if (/^(null|n\/a|none|unknown)$/i.test(normalized)) {
+      return null;
+    }
+
+    return normalized;
   }
 
   private joinHighlights(highlights: string[] | null | undefined): string {
@@ -918,7 +1147,9 @@ export class SearchService {
   }
 
   private getErrorMessage(error: unknown): string {
-    return error instanceof Error ? error.message : 'Search provider request failed.';
+    return error instanceof Error
+      ? error.message
+      : 'Search provider request failed.';
   }
 
   private formatQueryForLog(query: string): string {
