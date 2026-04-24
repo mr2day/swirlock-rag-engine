@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { searchTestPageHtml } from './search-test-page';
-import { isSearchProvider } from './search.types';
 
 @Controller('dev/search')
 export class SearchTestController {
@@ -20,24 +19,17 @@ export class SearchTestController {
   }
 
   @Get()
-  async testSearch(
-    @Query('q') query = '',
-    @Query('provider') provider = 'exa',
-  ) {
-    if (!isSearchProvider(provider)) {
-      throw new BadRequestException('provider must be exa.');
-    }
-
-    return this.searchService.search(query, provider);
+  async testSearch(@Query('q') query = '') {
+    return this.searchService.search(query);
   }
 
-  @Get('compare')
-  async compareSearchThenExtract(
+  @Get('extract')
+  async searchThenExtract(
     @Query('q') query = '',
     @Query('searchLimit') searchLimit = '5',
     @Query('extractLimit') extractLimit = '3',
   ) {
-    return this.searchService.compareSearchThenExtract(
+    return this.searchService.searchThenExtract(
       query,
       this.parsePositiveInt(searchLimit, 5, 'searchLimit', 10),
       this.parsePositiveInt(extractLimit, 3, 'extractLimit', 5),

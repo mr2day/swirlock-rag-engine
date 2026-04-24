@@ -1,11 +1,3 @@
-export const SEARCH_PROVIDERS = ['exa'] as const;
-
-export type SearchProvider = (typeof SEARCH_PROVIDERS)[number];
-
-export function isSearchProvider(value: string): value is SearchProvider {
-  return SEARCH_PROVIDERS.includes(value as SearchProvider);
-}
-
 export interface NormalizedSearchResult {
   title: string;
   url: string;
@@ -15,7 +7,6 @@ export interface NormalizedSearchResult {
 }
 
 export interface SearchExecutionResult {
-  provider: SearchProvider;
   query: string;
   effectiveQuery: string;
   appliedLocationFallback: string | null;
@@ -88,8 +79,7 @@ export interface ExtractStageResult extends ProviderStageMetadata {
   documents: ExtractedDocument[];
 }
 
-export interface ProviderComparisonResult {
-  provider: SearchProvider;
+export interface SearchExtractExecutionResult {
   status: 'ok' | 'error';
   totalLatencyMs: number;
   error: string | null;
@@ -97,7 +87,7 @@ export interface ProviderComparisonResult {
   extract: ExtractStageResult | null;
 }
 
-export interface SearchExtractComparisonResult {
+export interface SearchExtractInspectionResult {
   query: string;
   effectiveQuery: string;
   appliedLocationFallback: string | null;
@@ -106,5 +96,8 @@ export interface SearchExtractComparisonResult {
   extractLimit: number;
   totalLatencyMs: number;
   completedAt: string;
-  providers: ProviderComparisonResult[];
+  status: 'ok' | 'error';
+  error: string | null;
+  search: SearchStageResult | null;
+  extract: ExtractStageResult | null;
 }

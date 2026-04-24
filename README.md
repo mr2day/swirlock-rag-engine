@@ -136,8 +136,8 @@ The diagnostic search UI is available at:
 
 The diagnostic JSON routes are:
 
-- `GET /dev/search?q=your+query&provider=exa`
-- `GET /dev/search/compare?q=your+query&searchLimit=5&extractLimit=3`
+- `GET /dev/search?q=your+query`
+- `GET /dev/search/extract?q=your+query&searchLimit=5&extractLimit=3`
 
 The UI supports two diagnostic flows:
 

@@ -19,15 +19,13 @@ import type {
   ExtractStageResult,
   ExtractedDocument,
   NormalizedSearchResult,
-  ProviderComparisonResult,
   SearchExecutionResult,
-  SearchExtractComparisonResult,
-  SearchProvider,
+  SearchExtractExecutionResult,
+  SearchExtractInspectionResult,
   SearchStageResult,
   StructuredSummary,
   WeatherSnapshot,
 } from './search.types';
-import { SEARCH_PROVIDERS } from './search.types';
 
 type ExaHighlightsSearchResponse = SearchResponse<{
   highlights: {
@@ -112,16 +110,13 @@ export class SearchService {
     private readonly contentExcerptService: ContentExcerptService,
   ) {}
 
-  async search(
-    query: string,
-    provider: SearchProvider,
-  ): Promise<SearchExecutionResult> {
+  async search(query: string): Promise<SearchExecutionResult> {
     const normalizedQuery = this.normalizeQuery(query);
     const queryResolution = resolveSearchQuery(normalizedQuery);
     const startedAt = Date.now();
 
     this.logger.log(
-      `[${provider}] Dispatching search request for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
+      `[exa] Dispatching search request for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
     );
 
     try {
@@ -136,10 +131,9 @@ export class SearchService {
         queryResolution.executionHints,
       );
 
-      this.logSuccess(provider, latencyMs, normalized.length);
+      this.logSuccess(latencyMs, normalized.length);
 
       return {
-        provider,
         query: normalizedQuery,
         effectiveQuery: queryResolution.effectiveQuery,
         appliedLocationFallback: queryResolution.appliedLocationFallback,
@@ -158,40 +152,34 @@ export class SearchService {
 
       const message = this.getErrorMessage(error);
 
-      this.logger.error(`[${provider}] Search failed: ${message}`);
+      this.logger.error(`[exa] Search failed: ${message}`);
 
       throw new InternalServerErrorException(message);
     }
   }
 
-  async compareSearchThenExtract(
+  async searchThenExtract(
     query: string,
     searchLimit = 5,
     extractLimit = 3,
-  ): Promise<SearchExtractComparisonResult> {
+  ): Promise<SearchExtractInspectionResult> {
     const normalizedQuery = this.normalizeQuery(query);
     const queryResolution = resolveSearchQuery(normalizedQuery);
     const startedAt = Date.now();
 
     this.logger.log(
-      `[compare] Starting search-then-extract comparison for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
+      `[extract] Starting search-then-extract run for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
     );
 
-    const providers = await Promise.all(
-      SEARCH_PROVIDERS.map((provider) =>
-        this.compareProvider(
-          provider,
-          queryResolution,
-          searchLimit,
-          extractLimit,
-        ),
-      ),
+    const result = await this.runExaSearchThenExtract(
+      queryResolution,
+      searchLimit,
+      extractLimit,
+      startedAt,
     );
-
-    const totalLatencyMs = Date.now() - startedAt;
 
     this.logger.log(
-      `[compare] Completed comparison in ${totalLatencyMs}ms for ${providers.length} provider(s).`,
+      `[extract] Completed search-then-extract run in ${result.totalLatencyMs}ms.`,
     );
 
     return {
@@ -201,22 +189,19 @@ export class SearchService {
       notes: queryResolution.notes,
       searchLimit,
       extractLimit,
-      totalLatencyMs,
       completedAt: new Date().toISOString(),
-      providers,
+      ...result,
     };
   }
 
-  private async compareProvider(
-    provider: SearchProvider,
+  private async runExaSearchThenExtract(
     queryResolution: SearchQueryResolution,
     searchLimit: number,
     extractLimit: number,
-  ): Promise<ProviderComparisonResult> {
-    const startedAt = Date.now();
-
+    startedAt: number,
+  ): Promise<SearchExtractExecutionResult> {
     try {
-      return await this.compareExa(
+      return await this.searchThenExtractWithExa(
         queryResolution,
         searchLimit,
         extractLimit,
@@ -225,12 +210,9 @@ export class SearchService {
     } catch (error) {
       const message = this.getErrorMessage(error);
 
-      this.logger.error(
-        `[compare:${provider}] Provider comparison failed: ${message}`,
-      );
+      this.logger.error(`[extract:exa] Search/extract run failed: ${message}`);
 
       return {
-        provider,
         status: 'error',
         totalLatencyMs: Date.now() - startedAt,
         error: message,
@@ -240,16 +222,16 @@ export class SearchService {
     }
   }
 
-  private async compareExa(
+  private async searchThenExtractWithExa(
     queryResolution: SearchQueryResolution,
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
-  ): Promise<ProviderComparisonResult> {
+  ): Promise<SearchExtractExecutionResult> {
     const searchStartedAt = Date.now();
     const query = queryResolution.effectiveQuery;
 
-    this.logger.log(`[compare:exa] Search stage started.`);
+    this.logger.log(`[extract:exa] Search stage started.`);
 
     const searchRaw = await this.searchWithExaDiscovery(
       query,
@@ -277,13 +259,13 @@ export class SearchService {
     };
 
     this.logger.log(
-      `[compare:exa] Search stage completed in ${searchLatencyMs}ms with ${topResults.length} result(s).`,
+      `[extract:exa] Search stage completed in ${searchLatencyMs}ms with ${topResults.length} result(s).`,
     );
 
     const extractStartedAt = Date.now();
 
     this.logger.log(
-      `[compare:exa] Extract stage started for ${urlsToExtract.length} URL(s).`,
+      `[extract:exa] Extract stage started for ${urlsToExtract.length} URL(s).`,
     );
 
     const extractRaw =
@@ -338,11 +320,10 @@ export class SearchService {
     };
 
     this.logger.log(
-      `[compare:exa] Extract stage completed in ${extractLatencyMs}ms with ${documents.length} document(s).`,
+      `[extract:exa] Extract stage completed in ${extractLatencyMs}ms with ${documents.length} document(s).`,
     );
 
     return {
-      provider: 'exa',
       status: 'ok',
       totalLatencyMs: Date.now() - startedAt,
       error: null,
@@ -528,13 +509,9 @@ export class SearchService {
     };
   }
 
-  private logSuccess(
-    provider: SearchProvider,
-    latencyMs: number,
-    resultCount: number,
-  ): void {
+  private logSuccess(latencyMs: number, resultCount: number): void {
     this.logger.log(
-      `[${provider}] Search completed in ${latencyMs}ms with ${resultCount} normalized result(s).`,
+      `[exa] Search completed in ${latencyMs}ms with ${resultCount} normalized result(s).`,
     );
   }
 

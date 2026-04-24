@@ -302,18 +302,18 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         color: var(--muted);
       }
 
-      .provider-card {
+      .run-card {
         border: 1px solid var(--border);
         border-radius: 12px;
         background: var(--panel-elevated);
         overflow: hidden;
       }
 
-      .provider-card.error {
+      .run-card.error {
         border-color: rgba(244, 135, 113, 0.45);
       }
 
-      .provider-header {
+      .run-header {
         display: flex;
         flex-wrap: wrap;
         align-items: center;
@@ -324,13 +324,13 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         background: rgba(255, 255, 255, 0.02);
       }
 
-      .provider-header h3 {
+      .run-header h3 {
         margin: 0;
         font-size: 1rem;
         text-transform: capitalize;
       }
 
-      .provider-status {
+      .run-status {
         display: inline-flex;
         align-items: center;
         min-height: 1.75rem;
@@ -340,17 +340,17 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         font-weight: 600;
       }
 
-      .provider-status.ok {
+      .run-status.ok {
         background: rgba(137, 209, 133, 0.14);
         color: var(--success);
       }
 
-      .provider-status.error {
+      .run-status.error {
         background: rgba(244, 135, 113, 0.14);
         color: var(--danger);
       }
 
-      .provider-body {
+      .run-body {
         display: grid;
         gap: 1rem;
         padding: 1rem;
@@ -497,7 +497,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
         }
 
         .input-grid {
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .metric-grid {
@@ -527,7 +527,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
           <div class="hero-meta">
             <span class="badge">/dev/search</span>
-            <span class="badge">/dev/search/compare</span>
+            <span class="badge">/dev/search/extract</span>
             <span class="badge">Search + extract</span>
           </div>
         </header>
@@ -544,13 +544,6 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
           <div class="input-grid">
             <div>
-              <label for="provider">Search provider</label>
-              <select id="provider" name="provider">
-                <option value="exa">Exa</option>
-              </select>
-            </div>
-
-            <div>
               <label for="searchLimit">Search results for extraction</label>
               <input id="searchLimit" name="searchLimit" type="number" min="1" max="10" value="5" />
             </div>
@@ -563,7 +556,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
           <div class="actions">
             <button id="searchButton" class="button-primary" type="button">Run Exa search</button>
-            <button id="compareButton" class="button-secondary" type="button">Run Exa search + extract</button>
+            <button id="extractButton" class="button-secondary" type="button">Run Exa search + extract</button>
             <span id="status" class="status"></span>
           </div>
 
@@ -595,11 +588,10 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
     <script>
       const queryField = document.getElementById('query');
-      const providerField = document.getElementById('provider');
       const searchLimitField = document.getElementById('searchLimit');
       const extractLimitField = document.getElementById('extractLimit');
       const searchButton = document.getElementById('searchButton');
-      const compareButton = document.getElementById('compareButton');
+      const extractButton = document.getElementById('extractButton');
       const statusField = document.getElementById('status');
       const resultField = document.getElementById('result');
       const processView = document.getElementById('processView');
@@ -679,12 +671,12 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       function setLoadingState(isLoading) {
         searchButton.disabled = isLoading;
-        compareButton.disabled = isLoading;
+        extractButton.disabled = isLoading;
       }
 
       function renderLoadingState(mode) {
         const modeLabel =
-          mode === 'compare' ? 'Running Exa search and extract stages...' : 'Running Exa search...';
+          mode === 'extract' ? 'Running Exa search and extract stages...' : 'Running Exa search...';
 
         processView.innerHTML = '<p class="empty-state">' + escapeHtml(modeLabel) + '</p>';
       }
@@ -809,16 +801,15 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       function renderSingleSearchSummary(payload) {
         processView.innerHTML =
-          '<article class="provider-card">' +
-            '<div class="provider-header">' +
-              '<h3>' + escapeHtml(payload.provider + ' search') + '</h3>' +
-              '<span class="provider-status ok">ok</span>' +
+          '<article class="run-card">' +
+            '<div class="run-header">' +
+              '<h3>Exa search</h3>' +
+              '<span class="run-status ok">ok</span>' +
             '</div>' +
-            '<div class="provider-body">' +
+            '<div class="run-body">' +
               '<div class="metric-grid">' +
                 renderMetric('Latency', formatMillis(payload.latencyMs)) +
                 renderMetric('Results', formatNumber(payload.normalized ? payload.normalized.length : 0)) +
-                renderMetric('Provider', payload.provider) +
                 renderMetric('Query', payload.query) +
                 renderMetric('Effective query', payload.effectiveQuery || payload.query) +
               '</div>' +
@@ -831,71 +822,67 @@ export const searchTestPageHtml = `<!DOCTYPE html>
           '</article>';
       }
 
-      function renderCompareSummary(payload) {
-        processView.innerHTML = payload.providers.map((provider) => {
-          if (provider.status !== 'ok') {
-            return (
-              '<article class="provider-card error">' +
-                '<div class="provider-header">' +
-                  '<h3>' + escapeHtml(provider.provider) + '</h3>' +
-                  '<span class="provider-status error">error</span>' +
-                '</div>' +
-                '<div class="provider-body">' +
-                  '<p class="error-text">' + escapeHtml(provider.error || 'Unknown provider failure.') + '</p>' +
-                '</div>' +
-              '</article>'
-            );
-          }
-
-          const search = provider.search;
-          const extract = provider.extract;
-
-          return (
-            '<article class="provider-card">' +
-              '<div class="provider-header">' +
-                '<h3>' + escapeHtml(provider.provider) + '</h3>' +
-                '<span class="provider-status ok">ok</span>' +
+      function renderExtractSummary(payload) {
+        if (payload.status !== 'ok') {
+          processView.innerHTML =
+            '<article class="run-card error">' +
+              '<div class="run-header">' +
+                '<h3>Exa search + extract</h3>' +
+                '<span class="run-status error">error</span>' +
               '</div>' +
-              '<div class="provider-body">' +
-              '<div class="metric-grid">' +
-                  renderMetric('Total latency', formatMillis(provider.totalLatencyMs)) +
-                  renderMetric('Search latency', formatMillis(search ? search.latencyMs : null)) +
-                  renderMetric('Extract latency', formatMillis(extract ? extract.latencyMs : null)) +
-                  renderMetric('Search type', search ? formatValue(search.resolvedSearchType) : 'n/a') +
-                  renderMetric('Search results', search ? formatNumber(search.resultCount) : 'n/a') +
-                  renderMetric('Extracted docs', extract ? formatNumber(extract.documentCount) : 'n/a') +
-                  renderMetric('Extracted chars', extract ? formatNumber(extract.totalCharacters) : 'n/a') +
-                  renderMetric(
-                    'Credits / cost',
-                    search && search.usageCredits !== null
-                      ? formatNumber(search.usageCredits) + ' credits'
-                      : extract && extract.usageCredits !== null
-                        ? formatNumber(extract.usageCredits) + ' credits'
-                        : search && search.costDollarsTotal !== null
-                          ? '$' + String(search.costDollarsTotal)
-                          : extract && extract.costDollarsTotal !== null
-                            ? '$' + String(extract.costDollarsTotal)
-                            : 'n/a'
-                  ) +
-                '</div>' +
-                renderNotesBlock(payload) +
-                '<section class="stage-block">' +
-                  '<h4 class="stage-title">Search stage</h4>' +
-                  renderTopResults(search ? search.topResults : []) +
-                '</section>' +
-                '<section class="stage-block">' +
-                  '<h4 class="stage-title">Extract stage</h4>' +
-                  renderExtractedDocuments(extract ? extract.documents : [], extract ? extract.failedSources : []) +
-                '</section>' +
+              '<div class="run-body">' +
+                '<p class="error-text">' + escapeHtml(payload.error || 'Unknown extraction failure.') + '</p>' +
               '</div>' +
-            '</article>'
-          );
-        }).join('');
+            '</article>';
+          return;
+        }
+
+        const search = payload.search;
+        const extract = payload.extract;
+
+        processView.innerHTML =
+          '<article class="run-card">' +
+            '<div class="run-header">' +
+              '<h3>Exa search + extract</h3>' +
+              '<span class="run-status ok">ok</span>' +
+            '</div>' +
+            '<div class="run-body">' +
+            '<div class="metric-grid">' +
+                renderMetric('Total latency', formatMillis(payload.totalLatencyMs)) +
+                renderMetric('Search latency', formatMillis(search ? search.latencyMs : null)) +
+                renderMetric('Extract latency', formatMillis(extract ? extract.latencyMs : null)) +
+                renderMetric('Search type', search ? formatValue(search.resolvedSearchType) : 'n/a') +
+                renderMetric('Search results', search ? formatNumber(search.resultCount) : 'n/a') +
+                renderMetric('Extracted docs', extract ? formatNumber(extract.documentCount) : 'n/a') +
+                renderMetric('Extracted chars', extract ? formatNumber(extract.totalCharacters) : 'n/a') +
+                renderMetric(
+                  'Credits / cost',
+                  search && search.usageCredits !== null
+                    ? formatNumber(search.usageCredits) + ' credits'
+                    : extract && extract.usageCredits !== null
+                      ? formatNumber(extract.usageCredits) + ' credits'
+                      : search && search.costDollarsTotal !== null
+                        ? '$' + String(search.costDollarsTotal)
+                        : extract && extract.costDollarsTotal !== null
+                          ? '$' + String(extract.costDollarsTotal)
+                          : 'n/a'
+                ) +
+              '</div>' +
+              renderNotesBlock(payload) +
+              '<section class="stage-block">' +
+                '<h4 class="stage-title">Search stage</h4>' +
+                renderTopResults(search ? search.topResults : []) +
+              '</section>' +
+              '<section class="stage-block">' +
+                '<h4 class="stage-title">Extract stage</h4>' +
+                renderExtractedDocuments(extract ? extract.documents : [], extract ? extract.failedSources : []) +
+              '</section>' +
+            '</div>' +
+          '</article>';
       }
 
       async function runRequest(mode) {
         const query = queryField.value.trim();
-        const provider = providerField.value;
 
         if (!query) {
           statusField.textContent = 'Enter a search query first.';
@@ -906,22 +893,20 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
         setLoadingState(true);
         renderLoadingState(mode);
-        statusField.textContent = mode === 'compare' ? 'Extracting...' : 'Searching...';
+        statusField.textContent = mode === 'extract' ? 'Extracting...' : 'Searching...';
         statusField.className = 'status';
         resultField.textContent = 'Waiting for response...';
 
         const url = new URL(
-          mode === 'compare' ? '/dev/search/compare' : '/dev/search',
+          mode === 'extract' ? '/dev/search/extract' : '/dev/search',
           window.location.origin,
         );
 
         url.searchParams.set('q', query);
 
-        if (mode === 'compare') {
+        if (mode === 'extract') {
           url.searchParams.set('searchLimit', searchLimitField.value || '5');
           url.searchParams.set('extractLimit', extractLimitField.value || '3');
-        } else {
-          url.searchParams.set('provider', provider);
         }
 
         try {
@@ -943,8 +928,8 @@ export const searchTestPageHtml = `<!DOCTYPE html>
             throw new Error(message);
           }
 
-          if (mode === 'compare') {
-            renderCompareSummary(payload);
+          if (mode === 'extract') {
+            renderExtractSummary(payload);
             statusField.textContent = 'Search and extract completed.';
           } else {
             renderSingleSearchSummary(payload);
@@ -967,11 +952,11 @@ export const searchTestPageHtml = `<!DOCTYPE html>
       }
 
       searchButton.addEventListener('click', () => runRequest('search'));
-      compareButton.addEventListener('click', () => runRequest('compare'));
+      extractButton.addEventListener('click', () => runRequest('extract'));
 
       queryField.addEventListener('keydown', (event) => {
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-          runRequest(event.shiftKey ? 'compare' : 'search');
+          runRequest(event.shiftKey ? 'extract' : 'search');
         }
       });
     </script>
