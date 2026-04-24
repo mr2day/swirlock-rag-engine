@@ -127,7 +127,6 @@ For local testing, create a `.env` file based on `.env.example`:
 
 ```env
 PORT=3000
-TAVILY_API_KEY=your_tavily_key
 EXA_API_KEY=your_exa_key
 ```
 
@@ -137,13 +136,13 @@ The diagnostic search UI is available at:
 
 The diagnostic JSON routes are:
 
-- `GET /dev/search?q=your+query&provider=tavily|exa`
+- `GET /dev/search?q=your+query&provider=exa`
 - `GET /dev/search/compare?q=your+query&searchLimit=5&extractLimit=3`
 
 The UI supports two diagnostic flows:
 
-- single-provider search
-- search-then-extract comparison across Tavily and Exa
+- Exa search
+- Exa search-then-extract inspection
 
 When you start the server manually, search and extraction stages are logged in the Nest server console before dispatch and after completion.
 

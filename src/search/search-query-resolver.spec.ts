@@ -9,8 +9,6 @@ describe('resolveSearchQuery', () => {
     );
     expect(result.appliedLocationFallback).toBe('Bucharest, Romania');
     expect(result.executionHints.intent).toBe('current-weather');
-    expect(result.executionHints.tavilyCountry).toBe('romania');
-    expect(result.executionHints.tavilyTopic).toBe('general');
     expect(result.executionHints.exaUserLocation).toBe('RO');
     expect(result.executionHints.exaCategory).toBeNull();
     expect(result.executionHints.excludeDomains).toEqual([
@@ -28,7 +26,6 @@ describe('resolveSearchQuery', () => {
     );
     expect(result.appliedLocationFallback).toBeNull();
     expect(result.executionHints.intent).toBe('market-price');
-    expect(result.executionHints.tavilyTopic).toBe('finance');
     expect(result.executionHints.exaCategory).toBeNull();
     expect(result.executionHints.forceFreshContent).toBe(true);
   });
@@ -41,7 +38,6 @@ describe('resolveSearchQuery', () => {
     );
     expect(result.appliedLocationFallback).toBeNull();
     expect(result.executionHints.intent).toBe('sports-score');
-    expect(result.executionHints.tavilyTopic).toBe('news');
     expect(result.executionHints.exaCategory).toBe('news');
     expect(result.executionHints.forceFreshContent).toBe(true);
   });
@@ -52,7 +48,6 @@ describe('resolveSearchQuery', () => {
     expect(result.effectiveQuery).toBe('latest RAG evaluation methods');
     expect(result.appliedLocationFallback).toBeNull();
     expect(result.executionHints.intent).toBe('general');
-    expect(result.executionHints.tavilyTopic).toBe('general');
     expect(result.executionHints.exaCategory).toBeNull();
     expect(result.executionHints.excludeDomains).toEqual([]);
     expect(result.executionHints.forceFreshContent).toBe(false);

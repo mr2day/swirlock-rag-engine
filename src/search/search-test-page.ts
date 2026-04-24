@@ -519,8 +519,8 @@ export const searchTestPageHtml = `<!DOCTYPE html>
           <div>
             <h1>Swirlock Search Test</h1>
             <p class="subtitle">
-              Diagnostic UI for single-provider search and thin search-then-extract comparison.
-              Use the compare flow to judge whether Tavily and Exa return enough usable content
+              Diagnostic UI for Exa search and thin search-then-extract inspection.
+              Use the extract flow to judge whether Exa returns enough usable content
               for the RAG engine.
             </p>
           </div>
@@ -544,33 +544,32 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
           <div class="input-grid">
             <div>
-              <label for="provider">Provider for single search</label>
+              <label for="provider">Search provider</label>
               <select id="provider" name="provider">
-                <option value="tavily">Tavily</option>
                 <option value="exa">Exa</option>
               </select>
             </div>
 
             <div>
-              <label for="searchLimit">Search results for compare</label>
+              <label for="searchLimit">Search results for extraction</label>
               <input id="searchLimit" name="searchLimit" type="number" min="1" max="10" value="5" />
             </div>
 
             <div>
-              <label for="extractLimit">URLs to extract per provider</label>
+              <label for="extractLimit">URLs to extract</label>
               <input id="extractLimit" name="extractLimit" type="number" min="1" max="5" value="3" />
             </div>
           </div>
 
           <div class="actions">
-            <button id="searchButton" class="button-primary" type="button">Run single search</button>
-            <button id="compareButton" class="button-secondary" type="button">Run search + extract compare</button>
+            <button id="searchButton" class="button-primary" type="button">Run Exa search</button>
+            <button id="compareButton" class="button-secondary" type="button">Run Exa search + extract</button>
             <span id="status" class="status"></span>
           </div>
 
           <p class="hint">
-            Notes: Tavily requires <code>TAVILY_API_KEY</code>. Exa requires <code>EXA_API_KEY</code>.
-            Compare mode searches both providers, then extracts content from the top URLs returned by each.
+            Notes: Exa requires <code>EXA_API_KEY</code>.
+            Extract mode searches Exa, then extracts content from the top URLs returned by search.
           </p>
 
           <div class="results-block">
@@ -685,7 +684,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
       function renderLoadingState(mode) {
         const modeLabel =
-          mode === 'compare' ? 'Running search and extract stages for both providers...' : 'Running single-provider search...';
+          mode === 'compare' ? 'Running Exa search and extract stages...' : 'Running Exa search...';
 
         processView.innerHTML = '<p class="empty-state">' + escapeHtml(modeLabel) + '</p>';
       }
@@ -907,7 +906,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
         setLoadingState(true);
         renderLoadingState(mode);
-        statusField.textContent = mode === 'compare' ? 'Comparing providers...' : 'Searching...';
+        statusField.textContent = mode === 'compare' ? 'Extracting...' : 'Searching...';
         statusField.className = 'status';
         resultField.textContent = 'Waiting for response...';
 
@@ -946,7 +945,7 @@ export const searchTestPageHtml = `<!DOCTYPE html>
 
           if (mode === 'compare') {
             renderCompareSummary(payload);
-            statusField.textContent = 'Comparison completed.';
+            statusField.textContent = 'Search and extract completed.';
           } else {
             renderSingleSearchSummary(payload);
             statusField.textContent = 'Single search completed.';

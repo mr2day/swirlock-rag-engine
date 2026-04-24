@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { SearchService } from './search.service';
 import { searchTestPageHtml } from './search-test-page';
-import { isSearchProvider, type SearchProvider } from './search.types';
+import { isSearchProvider } from './search.types';
 
 @Controller('dev/search')
 export class SearchTestController {
@@ -22,15 +22,13 @@ export class SearchTestController {
   @Get()
   async testSearch(
     @Query('q') query = '',
-    @Query('provider') provider = 'tavily',
+    @Query('provider') provider = 'exa',
   ) {
     if (!isSearchProvider(provider)) {
-      throw new BadRequestException(
-        'provider must be one of: tavily, exa.',
-      );
+      throw new BadRequestException('provider must be exa.');
     }
 
-    return this.searchService.search(query, provider as SearchProvider);
+    return this.searchService.search(query, provider);
   }
 
   @Get('compare')

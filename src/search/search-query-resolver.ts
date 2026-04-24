@@ -1,5 +1,4 @@
 const HARDCODED_FALLBACK_LOCATION = 'Bucharest, Romania';
-const HARDCODED_FALLBACK_COUNTRY = 'romania';
 const HARDCODED_FALLBACK_USER_LOCATION = 'RO';
 const CURRENT_WEATHER_PREFERRED_EXCLUDE_DOMAINS = [
   'climate-data.org',
@@ -64,8 +63,6 @@ export interface SearchExecutionHints {
   intent: SearchIntent;
   exaUserLocation: string | null;
   exaCategory: 'news' | null;
-  tavilyCountry: string | null;
-  tavilyTopic: 'general' | 'news' | 'finance';
   excludeDomains: string[];
   forceFreshContent: boolean;
 }
@@ -212,8 +209,6 @@ function buildExecutionHints(
           ? HARDCODED_FALLBACK_USER_LOCATION
           : null,
         exaCategory: null,
-        tavilyCountry: hasRomaniaContext ? HARDCODED_FALLBACK_COUNTRY : null,
-        tavilyTopic: 'general',
         excludeDomains: [...CURRENT_WEATHER_PREFERRED_EXCLUDE_DOMAINS],
         forceFreshContent: true,
       };
@@ -224,8 +219,6 @@ function buildExecutionHints(
         intent,
         exaUserLocation: null,
         exaCategory: null,
-        tavilyCountry: null,
-        tavilyTopic: 'finance',
         excludeDomains: [],
         forceFreshContent: true,
       };
@@ -235,8 +228,6 @@ function buildExecutionHints(
         intent,
         exaUserLocation: null,
         exaCategory: 'news',
-        tavilyCountry: null,
-        tavilyTopic: 'news',
         excludeDomains: [],
         forceFreshContent: true,
       };
@@ -246,8 +237,6 @@ function buildExecutionHints(
         intent: 'general',
         exaUserLocation: null,
         exaCategory: null,
-        tavilyCountry: null,
-        tavilyTopic: 'general',
         excludeDomains: [],
         forceFreshContent: false,
       };

@@ -53,7 +53,9 @@ export function cleanContent(dirty: string): string {
     .filter((line) => line.length > 0)
     .filter((line) => !/^[-:| ]+$/.test(line))
     .filter((line) => !(line.split(/\s+/).length === 1 && line.length <= 2))
-    .filter((line) => !discardLinePatterns.some((pattern) => pattern.test(line)))
+    .filter(
+      (line) => !discardLinePatterns.some((pattern) => pattern.test(line)),
+    )
     .join('\n');
 
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n').trim();

@@ -24,7 +24,6 @@
     "@nestjs/config": "^4.0.4",
     "@nestjs/core": "^11.0.1",
     "@nestjs/platform-express": "^11.0.1",
-    "@tavily/core": "^0.7.2",
     "exa-js": "^2.12.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"

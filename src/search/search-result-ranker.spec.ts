@@ -8,8 +8,6 @@ describe('rankSearchResults', () => {
       intent: 'current-weather',
       exaUserLocation: 'RO',
       exaCategory: null,
-      tavilyCountry: 'romania',
-      tavilyTopic: 'general',
       excludeDomains: ['climate-data.org', 'predictwind.com'],
       forceFreshContent: true,
     };
@@ -42,8 +40,6 @@ describe('rankSearchResults', () => {
       intent: 'market-price',
       exaUserLocation: null,
       exaCategory: null,
-      tavilyCountry: null,
-      tavilyTopic: 'finance',
       excludeDomains: [],
       forceFreshContent: true,
     };
@@ -76,8 +72,6 @@ describe('rankSearchResults', () => {
       intent: 'sports-score',
       exaUserLocation: null,
       exaCategory: 'news',
-      tavilyCountry: null,
-      tavilyTopic: 'news',
       excludeDomains: [],
       forceFreshContent: true,
     };
@@ -110,8 +104,6 @@ describe('rankSearchResults', () => {
       intent: 'sports-score',
       exaUserLocation: null,
       exaCategory: 'news',
-      tavilyCountry: null,
-      tavilyTopic: 'news',
       excludeDomains: [],
       forceFreshContent: true,
     };

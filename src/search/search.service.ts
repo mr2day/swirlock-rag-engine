@@ -6,12 +6,6 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  tavily,
-  type TavilyClient,
-  type TavilyExtractResponse,
-  type TavilySearchResponse,
-} from '@tavily/core';
 import Exa, { type SearchResponse } from 'exa-js';
 import { ContentExcerptService } from './content-excerpt.service';
 import { cleanContent } from './content-cleaner';
@@ -113,8 +107,6 @@ export class SearchService {
 
   private exaClient: Exa | null = null;
 
-  private tavilyClient: TavilyClient | null = null;
-
   constructor(
     private readonly configService: ConfigService,
     private readonly contentExcerptService: ContentExcerptService,
@@ -133,59 +125,29 @@ export class SearchService {
     );
 
     try {
-      switch (provider) {
-        case 'tavily': {
-          const raw = await this.searchWithTavily(
-            queryResolution.effectiveQuery,
-            5,
-            queryResolution,
-          );
-          const latencyMs = Date.now() - startedAt;
-          const normalized = rankSearchResults(
-            this.normalizeTavilyResults(raw),
-            queryResolution.executionHints,
-          );
+      const raw = await this.searchWithExa(
+        queryResolution.effectiveQuery,
+        5,
+        queryResolution,
+      );
+      const latencyMs = Date.now() - startedAt;
+      const normalized = rankSearchResults(
+        this.normalizeExaResults(raw),
+        queryResolution.executionHints,
+      );
 
-          this.logSuccess(provider, latencyMs, normalized.length);
+      this.logSuccess(provider, latencyMs, normalized.length);
 
-          return {
-            provider,
-            query: normalizedQuery,
-            effectiveQuery: queryResolution.effectiveQuery,
-            appliedLocationFallback: queryResolution.appliedLocationFallback,
-            notes: queryResolution.notes,
-            latencyMs,
-            normalized,
-            raw,
-          };
-        }
-
-        case 'exa': {
-          const raw = await this.searchWithExa(
-            queryResolution.effectiveQuery,
-            5,
-            queryResolution,
-          );
-          const latencyMs = Date.now() - startedAt;
-          const normalized = rankSearchResults(
-            this.normalizeExaResults(raw),
-            queryResolution.executionHints,
-          );
-
-          this.logSuccess(provider, latencyMs, normalized.length);
-
-          return {
-            provider,
-            query: normalizedQuery,
-            effectiveQuery: queryResolution.effectiveQuery,
-            appliedLocationFallback: queryResolution.appliedLocationFallback,
-            notes: queryResolution.notes,
-            latencyMs,
-            normalized,
-            raw,
-          };
-        }
-      }
+      return {
+        provider,
+        query: normalizedQuery,
+        effectiveQuery: queryResolution.effectiveQuery,
+        appliedLocationFallback: queryResolution.appliedLocationFallback,
+        notes: queryResolution.notes,
+        latencyMs,
+        normalized,
+        raw,
+      };
     } catch (error) {
       if (
         error instanceof BadRequestException ||
@@ -254,22 +216,12 @@ export class SearchService {
     const startedAt = Date.now();
 
     try {
-      switch (provider) {
-        case 'tavily':
-          return await this.compareTavily(
-            queryResolution,
-            searchLimit,
-            extractLimit,
-            startedAt,
-          );
-        case 'exa':
-          return await this.compareExa(
-            queryResolution,
-            searchLimit,
-            extractLimit,
-            startedAt,
-          );
-      }
+      return await this.compareExa(
+        queryResolution,
+        searchLimit,
+        extractLimit,
+        startedAt,
+      );
     } catch (error) {
       const message = this.getErrorMessage(error);
 
@@ -286,96 +238,6 @@ export class SearchService {
         extract: null,
       };
     }
-  }
-
-  private async compareTavily(
-    queryResolution: SearchQueryResolution,
-    searchLimit: number,
-    extractLimit: number,
-    startedAt: number,
-  ): Promise<ProviderComparisonResult> {
-    const searchStartedAt = Date.now();
-    const query = queryResolution.effectiveQuery;
-
-    this.logger.log(`[compare:tavily] Search stage started.`);
-
-    const searchRaw = await this.searchWithTavilyDiscovery(
-      query,
-      searchLimit,
-      queryResolution,
-    );
-    const searchLatencyMs = Date.now() - searchStartedAt;
-    const topResults = rankSearchResults(
-      this.normalizeTavilyResults(searchRaw),
-      queryResolution.executionHints,
-    );
-    const urlsToExtract = topResults
-      .slice(0, extractLimit)
-      .map((result) => result.url);
-
-    const searchStage: SearchStageResult = {
-      latencyMs: searchLatencyMs,
-      requestId: searchRaw.requestId,
-      providerReportedLatencyMs: searchRaw.responseTime ?? null,
-      usageCredits: searchRaw.usage?.credits ?? null,
-      costDollarsTotal: null,
-      resultCount: topResults.length,
-      topResults,
-      resolvedSearchType: null,
-    };
-
-    this.logger.log(
-      `[compare:tavily] Search stage completed in ${searchLatencyMs}ms with ${topResults.length} result(s).`,
-    );
-
-    const extractStartedAt = Date.now();
-
-    this.logger.log(
-      `[compare:tavily] Extract stage started for ${urlsToExtract.length} URL(s).`,
-    );
-
-    const extractRaw =
-      urlsToExtract.length > 0
-        ? await this.extractWithTavily(urlsToExtract, query, queryResolution)
-        : this.createEmptyTavilyExtractResponse();
-    const extractLatencyMs = Date.now() - extractStartedAt;
-    const documents = this.normalizeTavilyExtractedDocuments(
-      extractRaw,
-      searchRaw.results,
-      query,
-      queryResolution.executionHints.intent,
-    );
-
-    const extractStage: ExtractStageResult = {
-      latencyMs: extractLatencyMs,
-      requestId: extractRaw.requestId,
-      providerReportedLatencyMs: extractRaw.responseTime ?? null,
-      usageCredits: extractRaw.usage?.credits ?? null,
-      costDollarsTotal: null,
-      documentCount: documents.length,
-      totalCharacters: documents.reduce(
-        (total, document) => total + document.contentLength,
-        0,
-      ),
-      failedSources: extractRaw.failedResults.map((result) => ({
-        url: result.url,
-        error: result.error,
-      })),
-      documents,
-    };
-
-    this.logger.log(
-      `[compare:tavily] Extract stage completed in ${extractLatencyMs}ms with ${documents.length} document(s).`,
-    );
-
-    return {
-      provider: 'tavily',
-      status: 'ok',
-      totalLatencyMs: Date.now() - startedAt,
-      error: null,
-      search: searchStage,
-      extract: extractStage,
-    };
   }
 
   private async compareExa(
@@ -489,89 +351,6 @@ export class SearchService {
     };
   }
 
-  private async searchWithTavily(
-    query: string,
-    maxResults: number,
-    queryResolution: SearchQueryResolution,
-  ): Promise<TavilySearchResponse> {
-    const tavilyClient = this.getTavilyClient();
-
-    if (!tavilyClient) {
-      throw new ServiceUnavailableException(
-        'TAVILY_API_KEY is not configured.',
-      );
-    }
-
-    return tavilyClient.search(query, {
-      searchDepth: queryResolution.executionHints.forceFreshContent
-        ? 'advanced'
-        : 'basic',
-      topic: queryResolution.executionHints.tavilyTopic,
-      maxResults,
-      chunksPerSource: queryResolution.executionHints.forceFreshContent
-        ? 1
-        : undefined,
-      country: queryResolution.executionHints.tavilyCountry ?? undefined,
-      excludeDomains:
-        queryResolution.executionHints.excludeDomains.length > 0
-          ? queryResolution.executionHints.excludeDomains
-          : undefined,
-      includeAnswer: false,
-      includeRawContent: false,
-    });
-  }
-
-  private async searchWithTavilyDiscovery(
-    query: string,
-    maxResults: number,
-    queryResolution: SearchQueryResolution,
-  ): Promise<TavilySearchResponse> {
-    const tavilyClient = this.getTavilyClient();
-
-    if (!tavilyClient) {
-      throw new ServiceUnavailableException(
-        'TAVILY_API_KEY is not configured.',
-      );
-    }
-
-    return tavilyClient.search(query, {
-      searchDepth: 'advanced',
-      topic: queryResolution.executionHints.tavilyTopic,
-      maxResults,
-      chunksPerSource: queryResolution.executionHints.forceFreshContent ? 1 : 3,
-      country: queryResolution.executionHints.tavilyCountry ?? undefined,
-      excludeDomains:
-        queryResolution.executionHints.excludeDomains.length > 0
-          ? queryResolution.executionHints.excludeDomains
-          : undefined,
-      includeAnswer: false,
-      includeRawContent: false,
-      includeUsage: true,
-    });
-  }
-
-  private async extractWithTavily(
-    urls: string[],
-    query: string,
-    queryResolution: SearchQueryResolution,
-  ): Promise<TavilyExtractResponse> {
-    const tavilyClient = this.getTavilyClient();
-
-    if (!tavilyClient) {
-      throw new ServiceUnavailableException(
-        'TAVILY_API_KEY is not configured.',
-      );
-    }
-
-    return tavilyClient.extract(urls, {
-      extractDepth: 'advanced',
-      format: 'text',
-      query,
-      chunksPerSource: queryResolution.executionHints.forceFreshContent ? 2 : 3,
-      includeUsage: true,
-    });
-  }
-
   private async searchWithExa(
     query: string,
     numResults: number,
@@ -683,34 +462,6 @@ export class SearchService {
     return this.exaClient;
   }
 
-  private getTavilyClient(): TavilyClient | null {
-    if (this.tavilyClient) {
-      return this.tavilyClient;
-    }
-
-    const apiKey = this.configService.get<string>('TAVILY_API_KEY');
-
-    if (!apiKey) {
-      return null;
-    }
-
-    this.tavilyClient = tavily({ apiKey });
-
-    return this.tavilyClient;
-  }
-
-  private normalizeTavilyResults(
-    raw: TavilySearchResponse,
-  ): NormalizedSearchResult[] {
-    return raw.results.map((result) => ({
-      title: result.title,
-      url: result.url,
-      snippet: this.normalizeSearchSnippet(result.content),
-      score: result.score,
-      publishedAt: result.publishedDate || null,
-    }));
-  }
-
   private normalizeExaResults(
     raw: ExaHighlightsSearchResponse,
   ): NormalizedSearchResult[] {
@@ -721,39 +472,6 @@ export class SearchService {
       score: result.score ?? null,
       publishedAt: result.publishedDate ?? null,
     }));
-  }
-
-  private normalizeTavilyExtractedDocuments(
-    raw: TavilyExtractResponse,
-    searchResults: TavilySearchResponse['results'],
-    query: string,
-    intent: SearchIntent,
-  ): ExtractedDocument[] {
-    const searchResultsByUrl = new Map(
-      searchResults.map((result) => [result.url, result] as const),
-    );
-
-    return raw.results.map((result) => {
-      const searchResult = searchResultsByUrl.get(result.url);
-      const content = result.rawContent ?? '';
-
-      return {
-        title: result.title ?? searchResult?.title ?? result.url,
-        url: result.url,
-        publishedAt: searchResult?.publishedDate ?? null,
-        score: searchResult?.score ?? null,
-        content,
-        contentLength: content.length,
-        excerpt: this.contentExcerptService.buildExcerpt(
-          content,
-          query,
-          intent,
-        ),
-        providerSummary: null,
-        structuredSummary: null,
-        weatherSnapshot: null,
-      };
-    });
   }
 
   private normalizeExaExtractedDocuments(
@@ -799,18 +517,6 @@ export class SearchService {
         weatherSnapshot,
       };
     });
-  }
-
-  private createEmptyTavilyExtractResponse(): TavilyExtractResponse {
-    return {
-      results: [],
-      failedResults: [],
-      responseTime: 0,
-      usage: {
-        credits: 0,
-      },
-      requestId: 'skipped-no-urls',
-    };
   }
 
   private createEmptyExaExtractResponse(): ExaExtractSearchResponse {
