@@ -6,7 +6,7 @@ const runtime = {
   serviceName: 'swirlock-rag-engine',
   apiVersion: 'v2',
   host: '127.0.0.1',
-  port: 3000,
+  port: 3001,
   knowledgeStorePath: path.join(rootDir, 'data', 'knowledge-store.json'),
   maxEvidenceChunks: 12,
   liveSearchLimit: 6,

@@ -180,6 +180,76 @@ describe('RetrievalService', () => {
     expect(result.evidenceChunks[0]?.sourceType).toBe('web');
   });
 
+  it('returns live evidence when cache persistence fails', async () => {
+    const {
+      service,
+      searchThenExtract,
+      knowledgeSearch,
+      upsertExtractedDocuments,
+    } = makeHarness();
+    const document: ExtractedDocument = {
+      title: 'RAG evaluation benchmark update',
+      url: 'https://example.com/rag-benchmark',
+      publishedAt: '2026-05-01T10:00:00.000Z',
+      score: 0.9,
+      content: 'A benchmark update discusses groundedness and answer recall.',
+      contentLength: 64,
+      excerpt: 'A benchmark update discusses groundedness and answer recall.',
+      providerSummary: null,
+      structuredSummary: null,
+      weatherSnapshot: null,
+    };
+
+    knowledgeSearch.mockResolvedValue([]);
+    upsertExtractedDocuments.mockRejectedValue(new Error('disk is full'));
+    searchThenExtract.mockResolvedValue({
+      query: 'latest RAG evaluation methods',
+      effectiveQuery: 'latest RAG evaluation methods',
+      appliedLocationFallback: null,
+      notes: [],
+      searchLimit: 5,
+      extractLimit: 3,
+      totalLatencyMs: 12,
+      completedAt: '2026-05-01T12:00:00.000Z',
+      status: 'ok',
+      error: null,
+      search: null,
+      extract: {
+        latencyMs: 7,
+        requestId: 'exa-extract',
+        providerReportedLatencyMs: null,
+        usageCredits: null,
+        costDollarsTotal: null,
+        documentCount: 1,
+        totalCharacters: 64,
+        failedSources: [],
+        documents: [document],
+      },
+    });
+
+    const result = await service.retrieveEvidence(makeRequest(), 'turn-1');
+
+    expect(result.evidenceChunks).toHaveLength(1);
+    expect(result.evidenceChunks[0]?.sourceType).toBe('web');
+    expect(result.retrievalDiagnostics.warnings?.[0]).toContain(
+      'cache persistence failed',
+    );
+  });
+
+  it('treats an explicit empty allowedModes array as no retrieval allowed', async () => {
+    const { service, searchThenExtract, knowledgeSearch } = makeHarness();
+
+    const result = await service.retrieveEvidence(
+      makeRequest({ allowedModes: [] }),
+      'turn-1',
+    );
+
+    expect(knowledgeSearch).not.toHaveBeenCalled();
+    expect(searchThenExtract).not.toHaveBeenCalled();
+    expect(result.normalizedQuery.retrievalMode).toBe('none');
+    expect(result.evidenceChunks).toEqual([]);
+  });
+
   it('keeps a successful envelope shape when live retrieval is unavailable', async () => {
     const { service, searchThenExtract, knowledgeSearch } = makeHarness();
 

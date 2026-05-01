@@ -23,8 +23,9 @@ In the wider Swirlock chatbot architecture, this service works alongside:
 
 - Chat Orchestrator
 - Context Fragmenter
-- Main LLM Server
-- Embedding Service
+- Primary LLM Host
+- Utility LLM Host
+- future Embedding Service
 
 The RAG Engine owns retrieval semantics.
 It does not own memory semantics, context-window management, or final answer generation.
@@ -34,9 +35,8 @@ It does not own memory semantics, context-window management, or final answer gen
 The RAG Engine:
 
 - accepts text, image, or multimodal retrieval input
-- uses a utility LLM to interpret the request, including image understanding when needed
-- normalizes the retrieval query
-- chooses a retrieval mode using utility-LLM guidance plus deterministic rules
+- normalizes text retrieval queries deterministically
+- chooses a retrieval mode using deterministic phase-one policy
 - searches a local knowledge store, the live web, or both
 - ranks, filters, and packages evidence
 - optionally produces an evidence-oriented synthesis for downstream use
@@ -93,7 +93,8 @@ The engine accepts:
 - images
 - combined text and image input
 
-Images are interpreted by the utility LLM and converted into semantic observations that support retrieval.
+Phase one accepts image references in the contract shape, but it does not yet perform visual interpretation.
+Image-derived retrieval support should be added by calling the Utility LLM Host through the generic v2 Model Host API.
 
 ## Output
 
@@ -125,7 +126,6 @@ The app uses `service.config.cjs` as the committed source of truth for local run
 
 Secrets may still come from `.env.local`, `.env`, or process environment. For local testing, create a `.env` file based on `.env.example`:
 
-
 ```env
 EXA_API_KEY=your_exa_key
 ```
@@ -137,6 +137,13 @@ data/knowledge-store.json
 ```
 
 `data/` is ignored by git because it is runtime retrieval state.
+This phase-one store is a local JSON file with lexical scoring; it is not PostgreSQL, a vector database, or a durable multi-process index.
+
+The default local HTTP binding is:
+
+```text
+127.0.0.1:3001
+```
 
 ## Contract API
 
@@ -183,7 +190,7 @@ pm2 start ecosystem.config.cjs
 
 The diagnostic search UI is available at:
 
-- `http://127.0.0.1:3000/dev/search/ui`
+- `http://127.0.0.1:3001/dev/search/ui`
 
 The diagnostic JSON routes are:
 

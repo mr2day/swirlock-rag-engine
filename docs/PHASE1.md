@@ -51,5 +51,5 @@ data/knowledge-store.json
 - Add a Utility LLM Host client for query interpretation and image observations.
 - Replace lexical local retrieval with embedding-backed retrieval once the Embedding Service contract exists.
 - Add OpenAPI-generated DTO parity or schema validation if the contracts stabilize.
-- Add e2e coverage for `POST /v2/retrieval/evidence`.
+- Broaden e2e coverage for `POST /v2/retrieval/evidence`.
 - Add a small seed/import command for local knowledge documents.

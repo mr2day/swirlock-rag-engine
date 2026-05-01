@@ -29,8 +29,8 @@ export class RetrievalPolicyService {
 
     if (!input.hasSearchableText) {
       return {
-        mode: allowsLocal ? 'local_rag' : 'none',
-        useLocal: allowsLocal,
+        mode: 'none',
+        useLocal: false,
         useLive: false,
         reason: input.hasImageInput
           ? 'Image input was received, but phase-one retrieval needs text or utility-model image observations before live web search.'

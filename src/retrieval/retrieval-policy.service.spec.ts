@@ -54,7 +54,8 @@ describe('RetrievalPolicyService', () => {
       hasImageInput: true,
     });
 
-    expect(decision.mode).toBe('local_rag');
+    expect(decision.mode).toBe('none');
+    expect(decision.useLocal).toBe(false);
     expect(decision.useLive).toBe(false);
   });
 });

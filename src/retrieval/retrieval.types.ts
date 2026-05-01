@@ -98,6 +98,7 @@ export interface RetrievalDiagnostics {
   localResultCount?: number;
   liveResultCount?: number;
   liveSearchError?: string;
+  warnings?: string[];
   knowledgeStorePath?: string;
 }
 

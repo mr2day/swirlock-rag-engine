@@ -279,32 +279,41 @@ export class KnowledgeStoreService {
     const content = document.content
       .slice(0, SEARCH_CONTENT_WINDOW)
       .toLowerCase();
-    let score = 0;
+    const normalizedQueryLower = normalizedQuery.toLowerCase();
+    let relevancePoints = 0;
 
     for (const term of queryTerms) {
-      score += this.countTerm(title, term) * 6;
-      score += this.countTerm(excerpt, term) * 3;
-      score += Math.min(this.countTerm(content, term), 8);
+      relevancePoints += this.countTerm(title, term) * 6;
+      relevancePoints += this.countTerm(excerpt, term) * 3;
+      relevancePoints += Math.min(this.countTerm(content, term), 8);
     }
 
-    if (content.includes(normalizedQuery.toLowerCase())) {
-      score += 12;
+    if (
+      title.includes(normalizedQueryLower) ||
+      excerpt.includes(normalizedQueryLower) ||
+      content.includes(normalizedQueryLower)
+    ) {
+      relevancePoints += 12;
     }
 
-    if (document.searchQueries.some((query) => query === normalizedQuery)) {
-      score += 8;
+    if (
+      document.searchQueries.some(
+        (query) => query.trim().toLowerCase() === normalizedQueryLower,
+      )
+    ) {
+      relevancePoints += 8;
     }
 
-    const freshnessScore = this.scoreFreshness(document, freshness);
-    score += freshnessScore * 8;
-
-    if (score <= 0) {
+    if (relevancePoints <= 0) {
       return null;
     }
 
+    const freshnessScore = this.scoreFreshness(document, freshness);
+    const score = relevancePoints + freshnessScore * 8;
+
     return {
       document,
-      relevanceScore: this.roundScore(score / (score + 18)),
+      relevanceScore: this.roundScore(relevancePoints / (relevancePoints + 18)),
       freshnessScore,
       score,
     };

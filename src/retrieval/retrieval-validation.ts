@@ -70,11 +70,11 @@ export function validateRetrieveEvidenceRequest(
   }
 
   const allowedModes =
-    query.allowedModes && query.allowedModes.length > 0
-      ? query.allowedModes.map((mode, index) =>
+    query.allowedModes === undefined
+      ? [...ALLOWED_MODES]
+      : query.allowedModes.map((mode, index) =>
           expectEnum(mode, ALLOWED_MODES, `query.allowedModes[${index}]`),
-        )
-      : [...ALLOWED_MODES];
+        );
   const requestedMaxEvidenceChunks = query.maxEvidenceChunks ?? 8;
 
   if (

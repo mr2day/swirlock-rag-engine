@@ -53,6 +53,34 @@ describe('KnowledgeStoreService', () => {
     expect(rawStore).toContain('rag-vector-indexes');
   });
 
+  it('does not return unrelated documents only because they are fresh', async () => {
+    const { service } = await makeService();
+    const document: ExtractedDocument = {
+      title: 'Sourdough starter troubleshooting',
+      url: 'https://example.com/sourdough',
+      publishedAt: '2026-05-01T10:00:00.000Z',
+      score: 0.9,
+      content:
+        'A fresh guide about bread flour, starter feeding schedules, and oven spring.',
+      contentLength: 78,
+      excerpt: 'A fresh guide about bread flour and starter feeding schedules.',
+      providerSummary: null,
+      structuredSummary: null,
+      weatherSnapshot: null,
+    };
+
+    await service.upsertExtractedDocuments(
+      [document],
+      'bread starter',
+      'general',
+      '2026-05-01T12:00:00.000Z',
+    );
+
+    await expect(service.search('vector retrieval', 'low', 3)).resolves.toEqual(
+      [],
+    );
+  });
+
   it('upserts by source URL instead of duplicating repeated live results', async () => {
     const { service } = await makeService();
     const document: ExtractedDocument = {

@@ -29,6 +29,7 @@ import type {
 interface LiveRetrievalResult {
   chunks: EvidenceChunk[];
   error: string | null;
+  warnings: string[];
 }
 
 @Injectable()
@@ -96,11 +97,13 @@ export class RetrievalService {
           request,
           queryResolution,
         )
-      : { chunks: [], error: null };
+      : { chunks: [], error: null, warnings: [] };
 
     if (liveResult.error) {
       caveats.push(liveResult.error);
     }
+
+    caveats.push(...liveResult.warnings);
 
     if (imageParts.length > 0) {
       caveats.push(
@@ -150,6 +153,9 @@ export class RetrievalService {
         localResultCount: localResults.length,
         liveResultCount: liveResult.chunks.length,
         ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
+        ...(liveResult.warnings.length > 0
+          ? { warnings: liveResult.warnings }
+          : {}),
         knowledgeStorePath: this.knowledgeStore.storePath,
       },
     };
@@ -185,17 +191,32 @@ export class RetrievalService {
         error: inspection.error
           ? `Live web retrieval failed: ${inspection.error}`
           : 'Live web retrieval failed.',
+        warnings: [],
       };
     }
 
     const documents = inspection.extract?.documents ?? [];
 
-    await this.knowledgeStore.upsertExtractedDocuments(
-      documents,
-      queryResolution?.effectiveQuery ?? effectiveQuery,
-      intent,
-      retrievedAt,
-    );
+    const warnings: string[] = [];
+
+    try {
+      await this.knowledgeStore.upsertExtractedDocuments(
+        documents,
+        queryResolution?.effectiveQuery ?? effectiveQuery,
+        intent,
+        retrievedAt,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Unknown persistence error.';
+
+      this.logger.warn(
+        `[retrieval] Live evidence was returned, but cache persistence failed: ${message}`,
+      );
+      warnings.push(
+        `Knowledge-store cache persistence failed after live retrieval: ${message}`,
+      );
+    }
 
     return {
       chunks: documents.map((document, index) =>
@@ -208,6 +229,7 @@ export class RetrievalService {
         ),
       ),
       error: null,
+      warnings,
     };
   }
 
