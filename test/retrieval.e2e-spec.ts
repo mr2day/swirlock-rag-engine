@@ -6,6 +6,7 @@ import { App } from 'supertest/types';
 import type { ErrorEnvelope } from '../src/common/api-envelope';
 import { AppModule } from './../src/app.module';
 import type { RetrieveEvidenceResponse } from '../src/retrieval/retrieval.types';
+import { UtilityLlmService } from '../src/retrieval/utility-llm.service';
 
 describe('RetrievalController (e2e)', () => {
   let app: INestApplication<App>;
@@ -13,7 +14,41 @@ describe('RetrievalController (e2e)', () => {
   beforeEach(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(UtilityLlmService)
+      .useValue({
+        getConfiguration: jest.fn().mockReturnValue({
+          enabled: false,
+          configuredUrl: 'http://127.0.0.1:3000',
+        }),
+        getStatus: jest.fn().mockResolvedValue({
+          enabled: false,
+          configuredUrl: 'http://127.0.0.1:3000',
+          ready: false,
+          durationMs: 0,
+        }),
+        prepareRetrievalSupport: jest.fn().mockResolvedValue({
+          queryText: null,
+          intent: null,
+          searchQueries: [],
+          imageObservations: [],
+          usedForQuery: false,
+          usedForImages: false,
+          warnings: [],
+          diagnostics: [],
+        }),
+        summarizeExtractedDocuments: jest.fn().mockResolvedValue({
+          summariesByUrl: new Map<string, string>(),
+          warnings: [],
+          diagnostics: [],
+        }),
+        shapeEvidenceSynthesis: jest.fn().mockResolvedValue({
+          synthesis: null,
+          warnings: [],
+          diagnostics: [],
+        }),
+      })
+      .compile();
 
     app = moduleFixture.createNestApplication();
     await app.init();

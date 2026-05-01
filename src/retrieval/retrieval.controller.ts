@@ -13,6 +13,7 @@ import { ContractExceptionFilter } from '../common/contract-exception.filter';
 import { serviceRuntimeConfig } from '../config/service-config';
 import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalService } from './retrieval.service';
+import { UtilityLlmService } from './utility-llm.service';
 import type {
   RetrieveEvidenceData,
   RetrieveEvidenceResponse,
@@ -26,6 +27,7 @@ export class RetrievalController {
     private readonly retrievalService: RetrievalService,
     private readonly knowledgeStore: KnowledgeStoreService,
     private readonly configService: ConfigService,
+    private readonly utilityLlmService: UtilityLlmService,
   ) {}
 
   @Post('retrieval/evidence')
@@ -60,6 +62,9 @@ export class RetrievalController {
         },
         providers: {
           exaConfigured: Boolean(this.configService.get<string>('EXA_API_KEY')),
+          utilityLlm: await this.utilityLlmService.getStatus(
+            correlationId || 'health-check',
+          ),
         },
       },
     };

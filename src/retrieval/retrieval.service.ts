@@ -14,6 +14,7 @@ import {
   validateRetrieveEvidenceRequest,
   assertCorrelationId,
 } from './retrieval-validation';
+import { UtilityLlmService } from './utility-llm.service';
 import type {
   EvidenceChunk,
   EvidenceSynthesis,
@@ -25,11 +26,24 @@ import type {
   RetrievalMode,
   ValidatedRetrieveEvidenceRequest,
 } from './retrieval.types';
+import type { UtilityLlmCallDiagnostics } from './utility-llm.types';
 
 interface LiveRetrievalResult {
   chunks: EvidenceChunk[];
   error: string | null;
   warnings: string[];
+  utilityDiagnostics: UtilityLlmCallDiagnostics[];
+  usedExtractionSummaries: boolean;
+}
+
+interface UtilityLlmRetrievalState {
+  enabled: boolean;
+  configuredUrl: string;
+  usedForQuery: boolean;
+  usedForImages: boolean;
+  usedForExtractionSummaries: boolean;
+  usedForEvidenceSynthesis: boolean;
+  calls: UtilityLlmCallDiagnostics[];
 }
 
 @Injectable()
@@ -41,6 +55,7 @@ export class RetrievalService {
     private readonly searchService: SearchService,
     private readonly knowledgeStore: KnowledgeStoreService,
     private readonly retrievalPolicy: RetrievalPolicyService,
+    private readonly utilityLlmService: UtilityLlmService,
   ) {}
 
   async retrieveEvidence(
@@ -57,17 +72,52 @@ export class RetrievalService {
         serviceRuntimeConfig.maxEvidenceChunks,
       ),
     );
-    const queryText = this.buildQueryText(request);
+    const initialQueryText = this.buildQueryText(request);
+    const imageParts = this.getImageParts(request);
+    const utilityConfig = this.utilityLlmService.getConfiguration();
+    const utilityState: UtilityLlmRetrievalState = {
+      enabled: utilityConfig.enabled,
+      configuredUrl: utilityConfig.configuredUrl,
+      usedForQuery: false,
+      usedForImages: false,
+      usedForExtractionSummaries: false,
+      usedForEvidenceSynthesis: false,
+      calls: [],
+    };
+    const utilitySupport = await this.utilityLlmService.prepareRetrievalSupport(
+      {
+        correlationId,
+        queryText: initialQueryText,
+        freshness: request.query.freshness,
+        allowedModes: request.query.allowedModes,
+        intent: request.query.intent,
+        hints: request.query.hints,
+        imageParts,
+      },
+    );
+
+    utilityState.usedForQuery = utilitySupport.usedForQuery;
+    utilityState.usedForImages = utilitySupport.usedForImages;
+    utilityState.calls.push(...utilitySupport.diagnostics);
+
+    const queryText = (
+      utilitySupport.queryText ||
+      utilitySupport.searchQueries[0] ||
+      initialQueryText
+    ).trim();
     const hasSearchableText = queryText.length > 0;
     const queryResolution = hasSearchableText
       ? resolveSearchQuery(queryText)
       : null;
     const effectiveQuery = queryResolution?.effectiveQuery ?? queryText;
-    const imageParts = this.getImageParts(request);
-    const imageObservations = this.buildImageObservations(imageParts);
+    const imageObservations =
+      utilitySupport.imageObservations.length > 0
+        ? utilitySupport.imageObservations
+        : this.buildImageObservations(imageParts);
     const modality = this.detectModality(request);
     const intent =
       request.query.intent?.trim() ||
+      utilitySupport.intent ||
       queryResolution?.executionHints.intent ||
       (imageParts.length > 0 ? 'image-supported-retrieval' : 'general');
     const shouldProbeLocal =
@@ -96,18 +146,29 @@ export class RetrievalService {
           intent,
           request,
           queryResolution,
+          correlationId,
         )
-      : { chunks: [], error: null, warnings: [] };
+      : {
+          chunks: [],
+          error: null,
+          warnings: [],
+          utilityDiagnostics: [],
+          usedExtractionSummaries: false,
+        };
 
     if (liveResult.error) {
       caveats.push(liveResult.error);
     }
 
+    caveats.push(...utilitySupport.warnings);
     caveats.push(...liveResult.warnings);
+    utilityState.usedForExtractionSummaries =
+      liveResult.usedExtractionSummaries;
+    utilityState.calls.push(...liveResult.utilityDiagnostics);
 
-    if (imageParts.length > 0) {
+    if (imageParts.length > 0 && !utilitySupport.usedForImages) {
       caveats.push(
-        'Image interpretation is reference-level only in phase one until a Utility LLM Host is configured.',
+        'Image interpretation is reference-level only because no Utility LLM image observations were available.',
       );
     }
 
@@ -130,12 +191,33 @@ export class RetrievalService {
       freshness: request.query.freshness,
       reason: policyDecision.reason,
     };
-    const synthesis = this.buildSynthesis(
-      request.query.synthesisMode,
-      evidenceChunks,
-      caveats,
-      policyDecision.mode,
-    );
+    const utilitySynthesis =
+      request.query.synthesisMode !== 'none'
+        ? await this.utilityLlmService.shapeEvidenceSynthesis({
+            correlationId,
+            queryText: effectiveQuery,
+            synthesisMode: request.query.synthesisMode,
+            evidenceChunks,
+            caveats,
+          })
+        : {
+            synthesis: null,
+            warnings: [],
+            diagnostics: [],
+          };
+
+    utilityState.usedForEvidenceSynthesis = Boolean(utilitySynthesis.synthesis);
+    utilityState.calls.push(...utilitySynthesis.diagnostics);
+    caveats.push(...utilitySynthesis.warnings);
+
+    const synthesis =
+      utilitySynthesis.synthesis ??
+      this.buildSynthesis(
+        request.query.synthesisMode,
+        evidenceChunks,
+        caveats,
+        policyDecision.mode,
+      );
 
     this.logger.log(
       `[retrieval] ${policyDecision.mode} produced ${evidenceChunks.length} evidence chunk(s) for correlation ${correlationId}.`,
@@ -143,7 +225,12 @@ export class RetrievalService {
 
     return {
       normalizedQuery,
-      searchQueries: this.buildSearchQueries(queryText, effectiveQuery),
+      searchQueries: this.buildSearchQueries(
+        initialQueryText,
+        queryText,
+        effectiveQuery,
+        utilitySupport.searchQueries,
+      ),
       evidenceChunks,
       ...(synthesis ? { evidenceSynthesis: synthesis } : {}),
       retrievalDiagnostics: {
@@ -153,9 +240,8 @@ export class RetrievalService {
         localResultCount: localResults.length,
         liveResultCount: liveResult.chunks.length,
         ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
-        ...(liveResult.warnings.length > 0
-          ? { warnings: liveResult.warnings }
-          : {}),
+        ...(caveats.length > 0 ? { warnings: caveats } : {}),
+        utilityLlm: utilityState,
         knowledgeStorePath: this.knowledgeStore.storePath,
       },
     };
@@ -166,6 +252,7 @@ export class RetrievalService {
     intent: string,
     request: ValidatedRetrieveEvidenceRequest,
     queryResolution: SearchQueryResolution | null,
+    correlationId: string,
   ): Promise<LiveRetrievalResult> {
     const retrievedAt = new Date().toISOString();
     const searchLimit = this.getConfiguredInteger(
@@ -192,12 +279,30 @@ export class RetrievalService {
           ? `Live web retrieval failed: ${inspection.error}`
           : 'Live web retrieval failed.',
         warnings: [],
+        utilityDiagnostics: [],
+        usedExtractionSummaries: false,
       };
     }
 
     const documents = inspection.extract?.documents ?? [];
-
     const warnings: string[] = [];
+    const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
+    const extractionSummaries =
+      await this.utilityLlmService.summarizeExtractedDocuments({
+        correlationId,
+        queryText: effectiveQuery,
+        intent,
+        documents: documents.map((document) => ({
+          title: document.title,
+          url: document.url,
+          excerpt: document.excerpt,
+          content: document.content,
+          publishedAt: document.publishedAt,
+        })),
+      });
+
+    warnings.push(...extractionSummaries.warnings);
+    utilityDiagnostics.push(...extractionSummaries.diagnostics);
 
     try {
       await this.knowledgeStore.upsertExtractedDocuments(
@@ -226,10 +331,13 @@ export class RetrievalService {
           retrievedAt,
           index,
           documents.length,
+          extractionSummaries.summariesByUrl.get(document.url),
         ),
       ),
       error: null,
       warnings,
+      utilityDiagnostics,
+      usedExtractionSummaries: extractionSummaries.summariesByUrl.size > 0,
     };
   }
 
@@ -275,6 +383,7 @@ export class RetrievalService {
     retrievedAt: string,
     index: number,
     totalDocuments: number,
+    utilitySummary?: string,
   ): EvidenceChunk {
     const publishedAt = this.normalizeOptionalTimestamp(document.publishedAt);
     const fallbackScore =
@@ -285,7 +394,9 @@ export class RetrievalService {
       sourceType: 'web',
       sourceTitle: document.title || document.url,
       sourceUrl: document.url,
-      content: this.limitEvidenceContent(document.excerpt || document.content),
+      content: this.limitEvidenceContent(
+        utilitySummary || document.excerpt || document.content,
+      ),
       relevanceScore: this.roundScore(document.score ?? fallbackScore),
       freshnessScore: this.scoreFreshness(
         publishedAt ?? retrievedAt,
@@ -364,10 +475,18 @@ export class RetrievalService {
   }
 
   private buildSearchQueries(
+    initialQueryText: string,
     queryText: string,
     effectiveQuery: string,
+    utilityQueries: string[],
   ): string[] {
-    return [...new Set([effectiveQuery, queryText].filter(Boolean))];
+    return [
+      ...new Set(
+        [effectiveQuery, queryText, ...utilityQueries, initialQueryText].filter(
+          Boolean,
+        ),
+      ),
+    ];
   }
 
   private dedupeEvidenceChunks(chunks: EvidenceChunk[]): EvidenceChunk[] {

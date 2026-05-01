@@ -11,6 +11,12 @@ const runtime = {
   maxEvidenceChunks: 12,
   liveSearchLimit: 6,
   liveExtractLimit: 4,
+  utilityLlm: {
+    enabled: true,
+    hostUrl: 'http://127.0.0.1:3000',
+    timeoutMs: 30000,
+    retries: 1,
+  },
 };
 
 function buildEnv(source = process.env) {
@@ -27,6 +33,14 @@ function buildEnv(source = process.env) {
       source.RAG_LIVE_SEARCH_LIMIT || String(runtime.liveSearchLimit),
     RAG_LIVE_EXTRACT_LIMIT:
       source.RAG_LIVE_EXTRACT_LIMIT || String(runtime.liveExtractLimit),
+    UTILITY_LLM_ENABLED:
+      source.UTILITY_LLM_ENABLED || String(runtime.utilityLlm.enabled),
+    UTILITY_LLM_HOST_URL:
+      source.UTILITY_LLM_HOST_URL || runtime.utilityLlm.hostUrl,
+    UTILITY_LLM_TIMEOUT_MS:
+      source.UTILITY_LLM_TIMEOUT_MS || String(runtime.utilityLlm.timeoutMs),
+    UTILITY_LLM_RETRIES:
+      source.UTILITY_LLM_RETRIES || String(runtime.utilityLlm.retries),
     EXA_API_KEY: source.EXA_API_KEY || '',
   };
 }

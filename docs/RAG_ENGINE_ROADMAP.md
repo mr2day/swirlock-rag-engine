@@ -10,31 +10,32 @@ to a high-quality retrieval system.
 - Local store: file-backed JSON cache at `data/knowledge-store.json`
 - Retrieval policy: deterministic local/live routing
 - Local HTTP binding: `127.0.0.1:3001`
-- Utility LLM Host: available as a separate Model Host service, but not yet called by RAG
+- Utility LLM Host: called over the v2 WebSocket inference stream for retrieval support
 
 ## 1. Utility LLM Host Client
 
-Status: not started
+Status: implemented in phase one
 
 Goal: let RAG use the local Utility LLM Host for retrieval-support inference while keeping model
 hosting separate from retrieval ownership.
 
 Work:
 
-- Add `UTILITY_LLM_HOST_URL` to `service.config.cjs`.
-- Add a typed Model Host HTTP client for `POST /v2/infer` and status checks.
-- Add health/readiness diagnostics for the configured Utility LLM Host.
-- Add timeout, retry, and degraded-mode behavior.
-- Add prompts for query rewriting and intent clarification.
-- Add prompts for image observations from `imageUrl` or resolved image media.
-- Add prompts for extraction summaries and evidence shaping.
-- Keep RAG responsible for final retrieval decisions; the model host only returns support text.
+- [x] Add `UTILITY_LLM_HOST_URL` to `service.config.cjs`.
+- [x] Add a typed Model Host WebSocket client for `WS /v2/infer/stream`.
+- [x] Add health/readiness diagnostics for the configured Utility LLM Host.
+- [x] Add timeout, retry, and degraded-mode behavior.
+- [x] Add prompts for query rewriting and intent clarification.
+- [x] Add prompts for image observations from `imageUrl`.
+- [x] Add prompts for extraction summaries and evidence shaping.
+- [x] Keep RAG responsible for final retrieval decisions; the model host only returns support text.
+- [ ] Add shared media resolution so `imageId` can be sent to the model host.
 
 Acceptance criteria:
 
-- RAG can call the Utility LLM Host on `127.0.0.1:3000` in local development.
-- Retrieval still works without the Utility LLM Host, with clear diagnostics.
-- Unit tests cover success, timeout, malformed response, and unavailable-host paths.
+- [x] RAG can call the Utility LLM Host on `127.0.0.1:3000` in local development.
+- [x] Retrieval still works without the Utility LLM Host, with clear diagnostics.
+- [x] Unit tests cover success, timeout, malformed response, and unavailable-host paths.
 
 ## 2. Durable Knowledge Store
 
@@ -156,4 +157,3 @@ Acceptance criteria:
 - Operators can tell whether failures come from Exa, PostgreSQL, Utility LLM Host, or request validation.
 - Runtime state can be backed up and restored.
 - Contract drift is caught by tests or generated validation.
-

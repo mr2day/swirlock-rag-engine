@@ -99,6 +99,22 @@ export interface RetrievalDiagnostics {
   liveResultCount?: number;
   liveSearchError?: string;
   warnings?: string[];
+  utilityLlm?: {
+    enabled: boolean;
+    configuredUrl: string;
+    usedForQuery: boolean;
+    usedForImages: boolean;
+    usedForExtractionSummaries: boolean;
+    usedForEvidenceSynthesis: boolean;
+    calls: Array<{
+      task: string;
+      attempted: boolean;
+      succeeded: boolean;
+      durationMs: number;
+      attempts: number;
+      error?: string;
+    }>;
+  };
   knowledgeStorePath?: string;
 }
 

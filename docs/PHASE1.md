@@ -11,6 +11,7 @@ Implemented:
 - shared `meta` response envelopes for the contract route
 - contract-shaped validation and error envelopes
 - deterministic retrieval-mode policy
+- Utility LLM Host WebSocket client for retrieval support
 - file-backed local knowledge store
 - live Exa search-then-extract wiring
 - cache persistence from successful live extraction
@@ -19,12 +20,13 @@ Implemented:
 
 ## Current Retrieval Strategy
 
-Phase one uses deterministic policy rather than a Utility LLM Host.
+Phase one uses deterministic retrieval policy plus optional Utility LLM Host support.
 
 - `low` freshness prefers local cache when there are local hits.
 - `medium` freshness uses live web when local cache is empty and combines local/live when cache exists.
 - `high` and `realtime` freshness prefer live web, with local cache as supporting evidence when available.
-- Image inputs are accepted as contract references, but visual interpretation is only reference-level until a Utility LLM Host is configured.
+- Image URL inputs can be sent to the Utility LLM Host for retrieval-oriented observations.
+- Image ID inputs are still reference-level until RAG has a shared media resolver.
 
 The local knowledge store is lexical, not vector-backed yet. It is still useful as a durable web-derived cache and is intentionally separate from chatbot memory.
 
@@ -36,6 +38,10 @@ Secrets may be supplied through `.env.local`, `.env`, or process environment. Fo
 
 ```env
 EXA_API_KEY=
+UTILITY_LLM_ENABLED=true
+UTILITY_LLM_HOST_URL=http://127.0.0.1:3000
+UTILITY_LLM_TIMEOUT_MS=30000
+UTILITY_LLM_RETRIES=1
 ```
 
 The local store defaults to:
@@ -48,7 +54,6 @@ data/knowledge-store.json
 
 ## Next Sensible Work
 
-- Add a Utility LLM Host client for query interpretation and image observations.
 - Replace lexical local retrieval with embedding-backed retrieval once the Embedding Service contract exists.
 - Add OpenAPI-generated DTO parity or schema validation if the contracts stabilize.
 - Broaden e2e coverage for `POST /v2/retrieval/evidence`.

@@ -35,7 +35,8 @@ It does not own memory semantics, context-window management, or final answer gen
 The RAG Engine:
 
 - accepts text, image, or multimodal retrieval input
-- normalizes text retrieval queries deterministically
+- can call the Utility LLM Host over the v2 WebSocket inference stream for retrieval-support tasks
+- normalizes text retrieval queries with Utility LLM support and deterministic fallback
 - chooses a retrieval mode using deterministic phase-one policy
 - searches a local knowledge store, the live web, or both
 - ranks, filters, and packages evidence
@@ -93,8 +94,9 @@ The engine accepts:
 - images
 - combined text and image input
 
-Phase one accepts image references in the contract shape, but it does not yet perform visual interpretation.
-Image-derived retrieval support should be added by calling the Utility LLM Host through the generic v2 Model Host API.
+Phase one accepts image references in the contract shape.
+Image URLs can be sent to the Utility LLM Host for retrieval-oriented observations.
+Image IDs still require a future shared media resolver before RAG can send image bytes or URLs to the model host.
 
 ## Output
 
@@ -143,6 +145,15 @@ The default local HTTP binding is:
 
 ```text
 127.0.0.1:3001
+```
+
+Utility LLM support is configured in `service.config.cjs`:
+
+```text
+UTILITY_LLM_ENABLED=true
+UTILITY_LLM_HOST_URL=http://127.0.0.1:3000
+UTILITY_LLM_TIMEOUT_MS=30000
+UTILITY_LLM_RETRIES=1
 ```
 
 ## Contract API
@@ -213,9 +224,10 @@ It currently contains:
 - a NestJS service scaffold
 - Exa live search and extract diagnostics
 - a `v2` contract-facing retrieval endpoint
+- a Utility LLM Host WebSocket client for query support, image observations, extraction summaries, and evidence shaping
 - a file-backed local web-derived knowledge store
 - deterministic retrieval-mode routing
 - evidence packaging and lightweight retrieval synthesis
 - unit coverage for query resolution, ranking, cache persistence, retrieval policy, and contract retrieval behavior
 
-The remaining larger pieces are Utility LLM Host integration, image interpretation, embedding-backed local retrieval, and broader e2e contract coverage.
+The remaining larger pieces are shared media resolution for `imageId`, embedding-backed local retrieval, durable storage, and broader e2e contract coverage.

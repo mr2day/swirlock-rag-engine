@@ -109,7 +109,9 @@ export function validateRetrieveEvidenceRequest(
   };
 }
 
-export function assertCorrelationId(correlationId: string | undefined): void {
+export function assertCorrelationId(
+  correlationId: string | undefined,
+): asserts correlationId is string {
   if (!correlationId?.trim()) {
     throw validationError('x-correlation-id header is required.');
   }

@@ -4,11 +4,17 @@ import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalController } from './retrieval.controller';
 import { RetrievalPolicyService } from './retrieval-policy.service';
 import { RetrievalService } from './retrieval.service';
+import { UtilityLlmService } from './utility-llm.service';
 
 @Module({
   imports: [SearchModule],
   controllers: [RetrievalController],
-  providers: [KnowledgeStoreService, RetrievalPolicyService, RetrievalService],
-  exports: [RetrievalService, KnowledgeStoreService],
+  providers: [
+    KnowledgeStoreService,
+    RetrievalPolicyService,
+    RetrievalService,
+    UtilityLlmService,
+  ],
+  exports: [RetrievalService, KnowledgeStoreService, UtilityLlmService],
 })
 export class RetrievalModule {}
