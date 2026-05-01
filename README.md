@@ -121,14 +121,65 @@ This repository should stay focused on the RAG Engine implementation and its own
 
 ## Local Configuration
 
-The app loads environment variables from `.env.local` and `.env`.
+The app uses `service.config.cjs` as the committed source of truth for local runtime settings such as host, port, retrieval limits, and the local knowledge-store path.
 
-For local testing, create a `.env` file based on `.env.example`:
+Secrets may still come from `.env.local`, `.env`, or process environment. For local testing, create a `.env` file based on `.env.example`:
+
 
 ```env
-PORT=3000
 EXA_API_KEY=your_exa_key
 ```
+
+The default local knowledge store is:
+
+```text
+data/knowledge-store.json
+```
+
+`data/` is ignored by git because it is runtime retrieval state.
+
+## Contract API
+
+The phase-one contract endpoint is:
+
+- `POST /v2/retrieval/evidence`
+
+All contract calls require:
+
+- `x-correlation-id`
+- a JSON body with `requestContext` and `query`
+
+The endpoint returns the common contract envelope:
+
+```json
+{
+  "meta": {
+    "requestId": "0196f9e8-71b6-7dc0-8d2c-b0b3c4567890",
+    "correlationId": "turn-123",
+    "apiVersion": "v2",
+    "servedAt": "2026-05-01T12:00:00.000Z"
+  },
+  "data": {
+    "normalizedQuery": {},
+    "searchQueries": [],
+    "evidenceChunks": [],
+    "retrievalDiagnostics": {}
+  }
+}
+```
+
+The service also exposes:
+
+- `GET /v2/health`
+
+For local process management:
+
+```powershell
+npm run build
+pm2 start ecosystem.config.cjs
+```
+
+## Diagnostic UI
 
 The diagnostic search UI is available at:
 
@@ -148,11 +199,16 @@ When you start the server manually, search and extraction stages are logged in t
 
 ## Current Status
 
-This repository is still at an early implementation stage.
+This repository is in phase-one implementation.
 
-At the moment, it contains:
+It currently contains:
 
 - a NestJS service scaffold
-- the initial package setup for future retrieval integrations
+- Exa live search and extract diagnostics
+- a `v2` contract-facing retrieval endpoint
+- a file-backed local web-derived knowledge store
+- deterministic retrieval-mode routing
+- evidence packaging and lightweight retrieval synthesis
+- unit coverage for query resolution, ranking, cache persistence, retrieval policy, and contract retrieval behavior
 
-The production retrieval pipeline is not fully implemented yet.
+The remaining larger pieces are Utility LLM Host integration, image interpretation, embedding-backed local retrieval, and broader e2e contract coverage.
