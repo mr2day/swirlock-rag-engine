@@ -116,6 +116,7 @@ export interface RetrievalDiagnostics {
     }>;
   };
   knowledgeStorePath?: string;
+  knowledgeStoreKind?: 'postgresql' | 'json_file';
 }
 
 export interface RetrieveEvidenceData {

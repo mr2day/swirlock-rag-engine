@@ -124,22 +124,40 @@ This repository should stay focused on the RAG Engine implementation and its own
 
 ## Local Configuration
 
-The app uses `service.config.cjs` as the committed source of truth for local runtime settings such as host, port, retrieval limits, and the local knowledge-store path.
+The app uses `service.config.cjs` as the committed source of truth for local runtime settings such as host, port, retrieval limits, and fallback knowledge-store path.
 
 Secrets may still come from `.env.local`, `.env`, or process environment. For local testing, create a `.env` file based on `.env.example`:
 
 ```env
 EXA_API_KEY=your_exa_key
+RAG_DATABASE_URL=postgresql://swirlock_rag:password@127.0.0.1:5432/swirlock_rag
 ```
 
-The default local knowledge store is:
+The preferred local knowledge store is PostgreSQL with `pgvector`:
+
+```text
+Database: swirlock_rag
+Role: swirlock_rag
+Tablespace: D:\swirlock\postgresql\tablespaces\rag_knowledge
+Extensions: vector, pg_trgm, unaccent, citext
+```
+
+Use these scripts from an Administrator PowerShell to prepare a Windows machine:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-pgvector-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\setup-rag-postgres.ps1
+```
+
+`setup-rag-postgres.ps1` creates or updates `.env.local` with `RAG_DATABASE_URL`. The password in that file is a local secret and is ignored by git.
+
+If `RAG_DATABASE_URL` is not configured, the service falls back to a development JSON store:
 
 ```text
 data/knowledge-store.json
 ```
 
-`data/` is ignored by git because it is runtime retrieval state.
-This phase-one store is a local JSON file with lexical scoring; it is not PostgreSQL, a vector database, or a durable multi-process index.
+`data/` is ignored by git because it is runtime retrieval state. The JSON path is now a fallback, not the preferred runtime store.
 
 The default local HTTP binding is:
 
@@ -225,9 +243,9 @@ It currently contains:
 - Exa live search and extract diagnostics
 - a `v2` contract-facing retrieval endpoint
 - a Utility LLM Host WebSocket client for query support, image observations, extraction summaries, and evidence shaping
-- a file-backed local web-derived knowledge store
+- a PostgreSQL-backed local web-derived knowledge store with full-text indexes and `pgvector` columns for future embeddings
 - deterministic retrieval-mode routing
 - evidence packaging and lightweight retrieval synthesis
 - unit coverage for query resolution, ranking, cache persistence, retrieval policy, and contract retrieval behavior
 
-The remaining larger pieces are shared media resolution for `imageId`, embedding-backed local retrieval, durable storage, and broader e2e contract coverage.
+The remaining larger pieces are shared media resolution for `imageId`, embedding generation, vector retrieval/reranking, and broader e2e contract coverage.

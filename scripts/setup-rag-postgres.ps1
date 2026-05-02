@@ -66,7 +66,7 @@ function Write-EnvLocal([string] $DatabaseUrl) {
   }
 
   $lines += "RAG_DATABASE_URL=$DatabaseUrl"
-  Set-Content -LiteralPath $envPath -Value $lines -Encoding utf8
+  Set-Content -LiteralPath $envPath -Value $lines -Encoding ascii
 }
 
 Assert-Admin

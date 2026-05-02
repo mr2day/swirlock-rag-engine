@@ -27,6 +27,7 @@ function buildEnv(source = process.env) {
     SWIRLOCK_API_VERSION: runtime.apiVersion,
     RAG_KNOWLEDGE_STORE_PATH:
       source.RAG_KNOWLEDGE_STORE_PATH || runtime.knowledgeStorePath,
+    RAG_DATABASE_URL: source.RAG_DATABASE_URL || '',
     RAG_MAX_EVIDENCE_CHUNKS:
       source.RAG_MAX_EVIDENCE_CHUNKS || String(runtime.maxEvidenceChunks),
     RAG_LIVE_SEARCH_LIMIT:

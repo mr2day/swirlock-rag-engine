@@ -49,17 +49,16 @@ export class RetrievalController {
 
   @Get('health')
   async getHealth(@Headers('x-correlation-id') correlationId?: string) {
+    const knowledgeStore = await this.knowledgeStore.getStatus();
+
     return {
       meta: createApiMeta(correlationId, 'v2'),
       data: {
         status: 'ok',
-        ready: true,
+        ready: knowledgeStore.ready,
         service: serviceRuntimeConfig.serviceName,
         apiVersion: serviceRuntimeConfig.apiVersion,
-        knowledgeStore: {
-          path: this.knowledgeStore.storePath,
-          documentCount: await this.knowledgeStore.count(),
-        },
+        knowledgeStore,
         providers: {
           exaConfigured: Boolean(this.configService.get<string>('EXA_API_KEY')),
           utilityLlm: await this.utilityLlmService.getStatus(

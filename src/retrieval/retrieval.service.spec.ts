@@ -43,6 +43,7 @@ describe('RetrievalService', () => {
     const searchThenExtract = jest.fn();
     const knowledgeSearch = jest.fn();
     const upsertExtractedDocuments = jest.fn();
+    const recordRetrievalRun = jest.fn().mockResolvedValue(undefined);
     const count = jest.fn();
     const getStatus = jest.fn().mockResolvedValue({
       enabled: false,
@@ -81,6 +82,7 @@ describe('RetrievalService', () => {
       storePath: 'C:/tmp/knowledge-store.json',
       search: knowledgeSearch,
       upsertExtractedDocuments,
+      recordRetrievalRun,
       count,
     } as unknown as jest.Mocked<KnowledgeStoreService>;
     const utilityLlmService = {
@@ -103,6 +105,7 @@ describe('RetrievalService', () => {
       searchThenExtract,
       knowledgeSearch,
       upsertExtractedDocuments,
+      recordRetrievalRun,
       getStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,

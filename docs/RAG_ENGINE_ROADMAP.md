@@ -7,7 +7,7 @@ to a high-quality retrieval system.
 
 - Contract-facing endpoint: `POST /v2/retrieval/evidence`
 - Live provider: Exa search-then-extract
-- Local store: file-backed JSON cache at `data/knowledge-store.json`
+- Local store: PostgreSQL when `RAG_DATABASE_URL` is configured, with JSON fallback for no-database development/test runs
 - Retrieval policy: deterministic local/live routing
 - Local HTTP binding: `127.0.0.1:3001`
 - Utility LLM Host: called over the v2 WebSocket inference stream for retrieval support
@@ -39,7 +39,7 @@ Acceptance criteria:
 
 ## 2. Durable Knowledge Store
 
-Status: not started
+Status: implemented for the local runtime baseline
 
 Goal: replace the JSON cache with a durable local store suitable for long-term retrieval and indexing.
 
@@ -53,19 +53,20 @@ Preferred direction:
 
 Work:
 
-- Choose and document the PostgreSQL data directory on the 1TB SSD.
-- Use `scripts/install-pgvector-windows.ps1` to build and install pgvector for local PostgreSQL.
-- Use `scripts/setup-rag-postgres.ps1` for local PostgreSQL role, database, tablespace, extension, and `.env.local` setup.
-- Add database connection config and migrations.
-- Model documents, chunks, sources, retrieval runs, and embeddings.
-- Keep the existing JSON store only as a temporary migration/source import path if useful.
-- Add backup/restore instructions before using the database as the source of truth.
+- [x] Choose and document the PostgreSQL tablespace on the 1TB SSD.
+- [x] Use `scripts/install-pgvector-windows.ps1` to build and install pgvector for local PostgreSQL.
+- [x] Use `scripts/setup-rag-postgres.ps1` for local PostgreSQL role, database, tablespace, extension, and `.env.local` setup.
+- [x] Add database connection config and service-managed migrations.
+- [x] Model documents, chunks, retrieval runs, lexical search vectors, and future embedding fields.
+- [x] Keep the existing JSON store only as a no-database fallback.
+- [ ] Add backup/restore instructions before using the database as the long-term source of truth.
+- [ ] Add an import path for any useful existing `data/knowledge-store.json` content.
 
 Acceptance criteria:
 
-- RAG persists documents and chunks in PostgreSQL.
-- A clean machine can recreate schema through migrations.
-- Local retrieval no longer depends on `data/knowledge-store.json`.
+- [x] RAG persists documents and chunks in PostgreSQL.
+- [x] A clean machine can recreate schema through migrations.
+- [x] Local retrieval no longer depends on `data/knowledge-store.json` when `RAG_DATABASE_URL` is configured.
 
 ## 3. Ingestion And Indexing Pipeline
 

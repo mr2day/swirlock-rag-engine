@@ -219,11 +219,19 @@ export class RetrievalService {
         policyDecision.mode,
       );
 
-    this.logger.log(
-      `[retrieval] ${policyDecision.mode} produced ${evidenceChunks.length} evidence chunk(s) for correlation ${correlationId}.`,
-    );
-
-    return {
+    const retrievalDiagnostics = {
+      liveSearchPerformed: policyDecision.useLive,
+      localSearchPerformed: shouldProbeLocal,
+      durationMs: Date.now() - startedAt,
+      localResultCount: localResults.length,
+      liveResultCount: liveResult.chunks.length,
+      ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
+      ...(caveats.length > 0 ? { warnings: caveats } : {}),
+      utilityLlm: utilityState,
+      knowledgeStorePath: this.knowledgeStore.storePath,
+      knowledgeStoreKind: this.knowledgeStore.storeKind,
+    };
+    const data: RetrieveEvidenceData = {
       normalizedQuery,
       searchQueries: this.buildSearchQueries(
         initialQueryText,
@@ -233,18 +241,35 @@ export class RetrievalService {
       ),
       evidenceChunks,
       ...(synthesis ? { evidenceSynthesis: synthesis } : {}),
-      retrievalDiagnostics: {
-        liveSearchPerformed: policyDecision.useLive,
-        localSearchPerformed: shouldProbeLocal,
-        durationMs: Date.now() - startedAt,
+      retrievalDiagnostics,
+    };
+
+    try {
+      await this.knowledgeStore.recordRetrievalRun({
+        correlationId,
+        queryText: effectiveQuery,
+        intent,
+        retrievalMode: policyDecision.mode,
+        durationMs: retrievalDiagnostics.durationMs,
         localResultCount: localResults.length,
         liveResultCount: liveResult.chunks.length,
-        ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
-        ...(caveats.length > 0 ? { warnings: caveats } : {}),
-        utilityLlm: utilityState,
-        knowledgeStorePath: this.knowledgeStore.storePath,
-      },
-    };
+        evidenceChunkIds: evidenceChunks.map((chunk) => chunk.evidenceId),
+        diagnostics: retrievalDiagnostics,
+        retrievedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      this.logger.warn(
+        `[retrieval] Retrieval run metadata was not persisted: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    this.logger.log(
+      `[retrieval] ${policyDecision.mode} produced ${evidenceChunks.length} evidence chunk(s) for correlation ${correlationId}.`,
+    );
+
+    return data;
   }
 
   private async performLiveRetrieval(

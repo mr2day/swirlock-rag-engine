@@ -1,17 +1,25 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 import { createUuidV7 } from '../common/ids';
 import { serviceRuntimeConfig } from '../config/service-config';
 import type { ExtractedDocument } from '../search/search.types';
-import type { RetrievalFreshness } from './retrieval.types';
+import {
+  KNOWLEDGE_STORE_MIGRATIONS,
+  KNOWLEDGE_STORE_SCHEMA_VERSION,
+} from './knowledge-store.schema';
+import type { RetrievalFreshness, RetrievalMode } from './retrieval.types';
 
 const STORE_SCHEMA_VERSION = 1;
 const MAX_STORED_DOCUMENTS = 500;
 const MAX_STORED_CONTENT_LENGTH = 12000;
 const SEARCH_CONTENT_WINDOW = 5000;
+const DATABASE_STATEMENT_TIMEOUT_MS = 15000;
+
+export type KnowledgeStoreKind = 'postgresql' | 'json_file';
 
 export interface KnowledgeStoreDocument {
   evidenceId: string;
@@ -37,28 +45,677 @@ export interface KnowledgeStoreSearchResult {
   score: number;
 }
 
+export interface KnowledgeStoreRetrievalRun {
+  correlationId: string;
+  queryText: string;
+  intent: string;
+  retrievalMode: RetrievalMode;
+  durationMs: number;
+  localResultCount: number;
+  liveResultCount: number;
+  evidenceChunkIds: string[];
+  diagnostics: Record<string, unknown>;
+  retrievedAt: string;
+}
+
+export interface KnowledgeStoreStatus {
+  kind: KnowledgeStoreKind;
+  location: string;
+  ready: boolean;
+  documentCount: number;
+  schemaVersion?: number;
+  error?: string;
+}
+
 interface KnowledgeStoreFile {
   schemaVersion: number;
   updatedAt: string;
   documents: KnowledgeStoreDocument[];
 }
 
+interface ExistingDocumentRow extends QueryResultRow {
+  id: string;
+  search_queries: string[];
+}
+
+interface ChunkRow extends QueryResultRow {
+  evidence_id: string;
+  source_title: string;
+  source_url: string | null;
+  content: string;
+  excerpt: string;
+  provider_summary: string | null;
+  intent: string;
+  search_queries: string[];
+  published_at: Date | string | null;
+  first_retrieved_at: Date | string;
+  last_retrieved_at: Date | string;
+  last_seen_at: Date | string;
+  times_seen: number;
+  content_hash: string;
+  lexical_rank?: number | string | null;
+  trigram_rank?: number | string | null;
+  exact_title?: boolean | null;
+  exact_excerpt?: boolean | null;
+  exact_content?: boolean | null;
+}
+
 @Injectable()
-export class KnowledgeStoreService {
+export class KnowledgeStoreService implements OnModuleDestroy {
   private readonly logger = new Logger(KnowledgeStoreService.name);
   private store: KnowledgeStoreFile | null = null;
   private writeQueue = Promise.resolve();
+  private pool: Pool | null = null;
+  private schemaReady: Promise<void> | null = null;
 
   constructor(private readonly configService: ConfigService) {}
 
+  get storeKind(): KnowledgeStoreKind {
+    return this.getDatabaseUrl() ? 'postgresql' : 'json_file';
+  }
+
   get storePath(): string {
+    const databaseUrl = this.getDatabaseUrl();
+
+    if (databaseUrl) {
+      return this.safeDatabaseLocation(databaseUrl);
+    }
+
     return (
       this.configService.get<string>('RAG_KNOWLEDGE_STORE_PATH') ||
       serviceRuntimeConfig.knowledgeStorePath
     );
   }
 
+  async onModuleDestroy(): Promise<void> {
+    if (this.pool) {
+      await this.pool.end();
+      this.pool = null;
+    }
+  }
+
+  async getStatus(): Promise<KnowledgeStoreStatus> {
+    try {
+      const documentCount = await this.count();
+
+      return {
+        kind: this.storeKind,
+        location: this.storePath,
+        ready: true,
+        documentCount,
+        ...(this.storeKind === 'postgresql'
+          ? { schemaVersion: KNOWLEDGE_STORE_SCHEMA_VERSION }
+          : { schemaVersion: STORE_SCHEMA_VERSION }),
+      };
+    } catch (error) {
+      return {
+        kind: this.storeKind,
+        location: this.storePath,
+        ready: false,
+        documentCount: 0,
+        error: this.getErrorMessage(error),
+      };
+    }
+  }
+
   async search(
+    query: string,
+    freshness: RetrievalFreshness,
+    maxResults: number,
+  ): Promise<KnowledgeStoreSearchResult[]> {
+    if (this.getDatabaseUrl()) {
+      return this.searchPostgres(query, freshness, maxResults);
+    }
+
+    return this.searchFile(query, freshness, maxResults);
+  }
+
+  async upsertExtractedDocuments(
+    documents: ExtractedDocument[],
+    query: string,
+    intent: string,
+    retrievedAt: string,
+  ): Promise<KnowledgeStoreDocument[]> {
+    if (this.getDatabaseUrl()) {
+      return this.upsertPostgresDocuments(
+        documents,
+        query,
+        intent,
+        retrievedAt,
+      );
+    }
+
+    return this.upsertFileDocuments(documents, query, intent, retrievedAt);
+  }
+
+  async recordRetrievalRun(run: KnowledgeStoreRetrievalRun): Promise<void> {
+    if (!this.getDatabaseUrl()) {
+      return;
+    }
+
+    await this.ensureDatabase();
+
+    await this.getPool().query(
+      `
+INSERT INTO rag_retrieval_runs (
+  id,
+  correlation_id,
+  query_text,
+  intent,
+  retrieval_mode,
+  duration_ms,
+  local_result_count,
+  live_result_count,
+  evidence_chunk_ids,
+  diagnostics,
+  retrieved_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid[], $10::jsonb, $11)
+`,
+      [
+        createUuidV7(),
+        run.correlationId,
+        run.queryText,
+        run.intent,
+        run.retrievalMode,
+        Math.max(0, Math.round(run.durationMs)),
+        Math.max(0, Math.round(run.localResultCount)),
+        Math.max(0, Math.round(run.liveResultCount)),
+        run.evidenceChunkIds.filter((id) => this.isUuid(id)),
+        JSON.stringify(run.diagnostics ?? {}),
+        run.retrievedAt,
+      ],
+    );
+  }
+
+  async count(): Promise<number> {
+    if (this.getDatabaseUrl()) {
+      await this.ensureDatabase();
+
+      const result = await this.getPool().query<{ count: string }>(
+        'SELECT COUNT(*)::text AS count FROM rag_source_documents',
+      );
+
+      return Number.parseInt(result.rows[0]?.count ?? '0', 10);
+    }
+
+    const store = await this.loadStore();
+
+    return store.documents.length;
+  }
+
+  private async searchPostgres(
+    query: string,
+    freshness: RetrievalFreshness,
+    maxResults: number,
+  ): Promise<KnowledgeStoreSearchResult[]> {
+    const normalizedQuery = query.trim();
+
+    if (!normalizedQuery) {
+      return [];
+    }
+
+    const queryTerms = this.tokenize(normalizedQuery);
+
+    if (queryTerms.length === 0) {
+      return [];
+    }
+
+    await this.ensureDatabase();
+
+    const result = await this.getPool().query<ChunkRow>(
+      `
+WITH retrieval_query AS (
+  SELECT websearch_to_tsquery('english', $1) AS tsquery
+)
+SELECT
+  c.id::text AS evidence_id,
+  c.source_title,
+  c.source_url::text AS source_url,
+  c.content,
+  c.excerpt,
+  c.provider_summary,
+  c.intent,
+  c.search_queries,
+  c.published_at,
+  c.first_retrieved_at,
+  c.last_retrieved_at,
+  c.last_seen_at,
+  c.times_seen,
+  c.content_hash,
+  ts_rank_cd(c.search_vector, retrieval_query.tsquery) AS lexical_rank,
+  GREATEST(
+    similarity(c.source_title, $1),
+    similarity(c.excerpt, $1),
+    similarity(left(c.content, $4), $1)
+  ) AS trigram_rank,
+  lower(c.source_title) LIKE lower($2) ESCAPE '\\' AS exact_title,
+  lower(c.excerpt) LIKE lower($2) ESCAPE '\\' AS exact_excerpt,
+  lower(left(c.content, $4)) LIKE lower($2) ESCAPE '\\' AS exact_content
+FROM rag_document_chunks c
+CROSS JOIN retrieval_query
+WHERE
+  c.search_vector @@ retrieval_query.tsquery
+  OR similarity(c.source_title, $1) >= 0.12
+  OR similarity(c.excerpt, $1) >= 0.12
+  OR lower(c.source_title) LIKE lower($2) ESCAPE '\\'
+  OR lower(c.excerpt) LIKE lower($2) ESCAPE '\\'
+  OR lower(left(c.content, $4)) LIKE lower($2) ESCAPE '\\'
+ORDER BY
+  (
+    ts_rank_cd(c.search_vector, retrieval_query.tsquery) * 8
+    + GREATEST(
+      similarity(c.source_title, $1),
+      similarity(c.excerpt, $1),
+      similarity(left(c.content, $4), $1)
+    )
+    + CASE WHEN lower(c.source_title) LIKE lower($2) ESCAPE '\\' THEN 0.35 ELSE 0 END
+    + CASE WHEN lower(c.excerpt) LIKE lower($2) ESCAPE '\\' THEN 0.25 ELSE 0 END
+    + CASE WHEN lower(left(c.content, $4)) LIKE lower($2) ESCAPE '\\' THEN 0.15 ELSE 0 END
+  ) DESC,
+  c.last_retrieved_at DESC
+LIMIT $3
+`,
+      [
+        normalizedQuery,
+        `%${this.escapeLikePattern(normalizedQuery)}%`,
+        Math.max(1, maxResults),
+        SEARCH_CONTENT_WINDOW,
+      ],
+    );
+
+    return result.rows.map((row) => {
+      const document = this.mapChunkRowToDocument(row);
+      const freshnessScore = this.scoreFreshness(document, freshness);
+      const relevanceScore = this.scorePostgresRelevance(row);
+
+      return {
+        document,
+        relevanceScore,
+        freshnessScore,
+        score: relevanceScore * 100 + freshnessScore * 8,
+      };
+    });
+  }
+
+  private async upsertPostgresDocuments(
+    documents: ExtractedDocument[],
+    query: string,
+    intent: string,
+    retrievedAt: string,
+  ): Promise<KnowledgeStoreDocument[]> {
+    if (documents.length === 0) {
+      return [];
+    }
+
+    await this.ensureDatabase();
+
+    const client = await this.getPool().connect();
+    const upserted: KnowledgeStoreDocument[] = [];
+
+    try {
+      await client.query('BEGIN');
+
+      for (const document of documents) {
+        const content = this.limitText(document.content || document.excerpt);
+
+        if (!content.trim()) {
+          continue;
+        }
+
+        const normalizedDocument = this.toKnowledgeDocument(
+          document,
+          content,
+          query,
+          intent,
+          retrievedAt,
+        );
+        const existing = await this.findExistingPostgresDocument(
+          client,
+          normalizedDocument.sourceUrl,
+          normalizedDocument.contentHash,
+        );
+        const saved = existing
+          ? await this.updatePostgresDocument(
+              client,
+              existing,
+              normalizedDocument,
+              query,
+              document,
+              retrievedAt,
+            )
+          : await this.insertPostgresDocument(
+              client,
+              normalizedDocument,
+              document,
+            );
+
+        upserted.push(saved);
+      }
+
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    return upserted;
+  }
+
+  private async insertPostgresDocument(
+    client: PoolClient,
+    document: KnowledgeStoreDocument,
+    extractedDocument: ExtractedDocument,
+  ): Promise<KnowledgeStoreDocument> {
+    const metadata = this.buildDocumentMetadata(extractedDocument);
+
+    await client.query(
+      `
+INSERT INTO rag_source_documents (
+  id,
+  source_title,
+  source_url,
+  provider_summary,
+  intent,
+  search_queries,
+  published_at,
+  first_retrieved_at,
+  last_retrieved_at,
+  last_seen_at,
+  times_seen,
+  content_hash,
+  metadata
+) VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, $10, $11, $12, $13::jsonb)
+`,
+      [
+        document.evidenceId,
+        document.sourceTitle,
+        document.sourceUrl,
+        document.providerSummary,
+        document.intent,
+        document.searchQueries,
+        document.publishedAt,
+        document.firstRetrievedAt,
+        document.lastRetrievedAt,
+        document.lastSeenAt,
+        document.timesSeen,
+        document.contentHash,
+        JSON.stringify(metadata),
+      ],
+    );
+
+    await client.query(
+      `
+INSERT INTO rag_document_chunks (
+  id,
+  document_id,
+  chunk_index,
+  source_title,
+  source_url,
+  content,
+  excerpt,
+  provider_summary,
+  intent,
+  search_queries,
+  published_at,
+  first_retrieved_at,
+  last_retrieved_at,
+  last_seen_at,
+  times_seen,
+  content_hash,
+  search_vector,
+  metadata
+) VALUES (
+  $1,
+  $2,
+  0,
+  $3,
+  $4,
+  $5,
+  $6,
+  $7,
+  $8,
+  $9::text[],
+  $10,
+  $11,
+  $12,
+  $13,
+  $14,
+  $15,
+  setweight(to_tsvector('english', coalesce($3, '')), 'A')
+    || setweight(to_tsvector('english', coalesce($6, '')), 'B')
+    || setweight(to_tsvector('english', coalesce($5, '')), 'C'),
+  $16::jsonb
+)
+`,
+      [
+        document.evidenceId,
+        document.evidenceId,
+        document.sourceTitle,
+        document.sourceUrl,
+        document.content,
+        document.excerpt,
+        document.providerSummary,
+        document.intent,
+        document.searchQueries,
+        document.publishedAt,
+        document.firstRetrievedAt,
+        document.lastRetrievedAt,
+        document.lastSeenAt,
+        document.timesSeen,
+        document.contentHash,
+        JSON.stringify(metadata),
+      ],
+    );
+
+    return document;
+  }
+
+  private async updatePostgresDocument(
+    client: PoolClient,
+    existing: ExistingDocumentRow,
+    incoming: KnowledgeStoreDocument,
+    query: string,
+    extractedDocument: ExtractedDocument,
+    retrievedAt: string,
+  ): Promise<KnowledgeStoreDocument> {
+    const searchQueries = this.mergeSearchQueries(
+      existing.search_queries,
+      query,
+    );
+    const metadata = this.buildDocumentMetadata(extractedDocument);
+
+    await client.query(
+      `
+UPDATE rag_source_documents
+SET
+  source_title = $2,
+  source_url = COALESCE($3, source_url),
+  provider_summary = COALESCE($4, provider_summary),
+  intent = $5,
+  search_queries = $6::text[],
+  published_at = COALESCE($7, published_at),
+  last_retrieved_at = $8,
+  last_seen_at = $8,
+  times_seen = times_seen + 1,
+  content_hash = $9,
+  metadata = metadata || $10::jsonb,
+  updated_at = now()
+WHERE id = $1
+`,
+      [
+        existing.id,
+        incoming.sourceTitle,
+        incoming.sourceUrl,
+        incoming.providerSummary,
+        incoming.intent,
+        searchQueries,
+        incoming.publishedAt,
+        retrievedAt,
+        incoming.contentHash,
+        JSON.stringify(metadata),
+      ],
+    );
+
+    const chunkResult = await client.query<ChunkRow>(
+      `
+UPDATE rag_document_chunks
+SET
+  source_title = $2,
+  source_url = COALESCE($3, source_url),
+  content = $4,
+  excerpt = $5,
+  provider_summary = COALESCE($6, provider_summary),
+  intent = $7,
+  search_queries = $8::text[],
+  published_at = COALESCE($9, published_at),
+  last_retrieved_at = $10,
+  last_seen_at = $10,
+  times_seen = times_seen + 1,
+  content_hash = $11,
+  search_vector =
+    setweight(to_tsvector('english', coalesce($2, '')), 'A')
+    || setweight(to_tsvector('english', coalesce($5, '')), 'B')
+    || setweight(to_tsvector('english', coalesce($4, '')), 'C'),
+  metadata = metadata || $12::jsonb,
+  updated_at = now()
+WHERE document_id = $1 AND chunk_index = 0
+RETURNING
+  id::text AS evidence_id,
+  source_title,
+  source_url::text AS source_url,
+  content,
+  excerpt,
+  provider_summary,
+  intent,
+  search_queries,
+  published_at,
+  first_retrieved_at,
+  last_retrieved_at,
+  last_seen_at,
+  times_seen,
+  content_hash
+`,
+      [
+        existing.id,
+        incoming.sourceTitle,
+        incoming.sourceUrl,
+        incoming.content,
+        incoming.excerpt,
+        incoming.providerSummary,
+        incoming.intent,
+        searchQueries,
+        incoming.publishedAt,
+        retrievedAt,
+        incoming.contentHash,
+        JSON.stringify(metadata),
+      ],
+    );
+
+    if (chunkResult.rows[0]) {
+      return this.mapChunkRowToDocument(chunkResult.rows[0]);
+    }
+
+    const replacement = {
+      ...incoming,
+      evidenceId: createUuidV7(),
+      searchQueries,
+    };
+
+    await client.query(
+      `
+INSERT INTO rag_document_chunks (
+  id,
+  document_id,
+  chunk_index,
+  source_title,
+  source_url,
+  content,
+  excerpt,
+  provider_summary,
+  intent,
+  search_queries,
+  published_at,
+  first_retrieved_at,
+  last_retrieved_at,
+  last_seen_at,
+  times_seen,
+  content_hash,
+  search_vector,
+  metadata
+) VALUES (
+  $1,
+  $2,
+  0,
+  $3,
+  $4,
+  $5,
+  $6,
+  $7,
+  $8,
+  $9::text[],
+  $10,
+  $11,
+  $12,
+  $13,
+  $14,
+  $15,
+  setweight(to_tsvector('english', coalesce($3, '')), 'A')
+    || setweight(to_tsvector('english', coalesce($6, '')), 'B')
+    || setweight(to_tsvector('english', coalesce($5, '')), 'C'),
+  $16::jsonb
+)
+`,
+      [
+        replacement.evidenceId,
+        existing.id,
+        replacement.sourceTitle,
+        replacement.sourceUrl,
+        replacement.content,
+        replacement.excerpt,
+        replacement.providerSummary,
+        replacement.intent,
+        replacement.searchQueries,
+        replacement.publishedAt,
+        replacement.firstRetrievedAt,
+        replacement.lastRetrievedAt,
+        replacement.lastSeenAt,
+        replacement.timesSeen,
+        replacement.contentHash,
+        JSON.stringify(metadata),
+      ],
+    );
+
+    return replacement;
+  }
+
+  private async findExistingPostgresDocument(
+    client: PoolClient,
+    sourceUrl: string | null,
+    contentHash: string,
+  ): Promise<ExistingDocumentRow | null> {
+    const result = await client.query<ExistingDocumentRow>(
+      `
+SELECT id::text, search_queries
+FROM rag_source_documents
+WHERE
+  ($1::citext IS NOT NULL AND source_url = $1::citext)
+  OR content_hash = $2
+ORDER BY
+  CASE
+    WHEN $1::citext IS NOT NULL AND source_url = $1::citext THEN 0
+    ELSE 1
+  END
+LIMIT 1
+`,
+      [sourceUrl, contentHash],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async searchFile(
     query: string,
     freshness: RetrievalFreshness,
     maxResults: number,
@@ -94,7 +751,7 @@ export class KnowledgeStoreService {
       .slice(0, maxResults);
   }
 
-  async upsertExtractedDocuments(
+  private async upsertFileDocuments(
     documents: ExtractedDocument[],
     query: string,
     intent: string,
@@ -155,10 +812,88 @@ export class KnowledgeStoreService {
     return upserted;
   }
 
-  async count(): Promise<number> {
-    const store = await this.loadStore();
+  private async ensureDatabase(): Promise<void> {
+    if (!this.schemaReady) {
+      this.schemaReady = this.runMigrations().catch((error) => {
+        this.schemaReady = null;
+        throw error;
+      });
+    }
 
-    return store.documents.length;
+    await this.schemaReady;
+  }
+
+  private async runMigrations(): Promise<void> {
+    const client = await this.getPool().connect();
+
+    try {
+      await client.query(
+        "SELECT pg_advisory_lock(hashtext('swirlock_rag_knowledge_store_schema'))",
+      );
+      await client.query(`
+CREATE TABLE IF NOT EXISTS rag_schema_migrations (
+  version integer PRIMARY KEY,
+  name text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now()
+)
+`);
+
+      for (const migration of KNOWLEDGE_STORE_MIGRATIONS) {
+        const existing = await client.query(
+          'SELECT 1 FROM rag_schema_migrations WHERE version = $1',
+          [migration.version],
+        );
+
+        if (existing.rowCount) {
+          continue;
+        }
+
+        try {
+          await client.query('BEGIN');
+          await client.query(migration.sql);
+          await client.query(
+            'INSERT INTO rag_schema_migrations (version, name) VALUES ($1, $2)',
+            [migration.version, migration.name],
+          );
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        }
+      }
+    } finally {
+      try {
+        await client.query(
+          "SELECT pg_advisory_unlock(hashtext('swirlock_rag_knowledge_store_schema'))",
+        );
+      } finally {
+        client.release();
+      }
+    }
+  }
+
+  private getPool(): Pool {
+    if (!this.pool) {
+      const connectionString = this.getDatabaseUrl();
+
+      if (!connectionString) {
+        throw new Error('RAG_DATABASE_URL is not configured.');
+      }
+
+      this.pool = new Pool({
+        connectionString,
+        application_name: serviceRuntimeConfig.serviceName,
+        statement_timeout: DATABASE_STATEMENT_TIMEOUT_MS,
+        connectionTimeoutMillis: 5000,
+        max: 10,
+      });
+    }
+
+    return this.pool;
+  }
+
+  private getDatabaseUrl(): string {
+    return this.configService.get<string>('RAG_DATABASE_URL')?.trim() ?? '';
   }
 
   private async loadStore(): Promise<KnowledgeStoreFile> {
@@ -256,10 +991,7 @@ export class KnowledgeStoreService {
       excerpt: incoming.excerpt || existing.excerpt,
       providerSummary: incoming.providerSummary ?? existing.providerSummary,
       intent: incoming.intent || existing.intent,
-      searchQueries: [...new Set([query, ...existing.searchQueries])].slice(
-        0,
-        20,
-      ),
+      searchQueries: this.mergeSearchQueries(existing.searchQueries, query),
       publishedAt: incoming.publishedAt ?? existing.publishedAt,
       lastRetrievedAt: retrievedAt,
       lastSeenAt: retrievedAt,
@@ -298,7 +1030,8 @@ export class KnowledgeStoreService {
 
     if (
       document.searchQueries.some(
-        (query) => query.trim().toLowerCase() === normalizedQueryLower,
+        (storedQuery) =>
+          storedQuery.trim().toLowerCase() === normalizedQueryLower,
       )
     ) {
       relevancePoints += 8;
@@ -317,6 +1050,19 @@ export class KnowledgeStoreService {
       freshnessScore,
       score,
     };
+  }
+
+  private scorePostgresRelevance(row: ChunkRow): number {
+    const lexicalRank = this.toNumber(row.lexical_rank);
+    const trigramRank = this.toNumber(row.trigram_rank);
+    const exactBoost =
+      (row.exact_title ? 0.25 : 0) +
+      (row.exact_excerpt ? 0.18 : 0) +
+      (row.exact_content ? 0.12 : 0);
+
+    return this.roundScore(
+      Math.min(1, lexicalRank * 5 + trigramRank * 0.75 + exactBoost),
+    );
   }
 
   private scoreFreshness(
@@ -346,6 +1092,42 @@ export class KnowledgeStoreService {
 
   private decay(ageDays: number, halfLifeDays: number): number {
     return this.roundScore(Math.exp(-ageDays / halfLifeDays));
+  }
+
+  private mapChunkRowToDocument(row: ChunkRow): KnowledgeStoreDocument {
+    return {
+      evidenceId: row.evidence_id,
+      sourceTitle: row.source_title,
+      sourceUrl: row.source_url,
+      content: row.content,
+      excerpt: row.excerpt,
+      providerSummary: row.provider_summary,
+      intent: row.intent,
+      searchQueries: Array.isArray(row.search_queries)
+        ? row.search_queries
+        : [],
+      publishedAt: this.formatTimestamp(row.published_at),
+      firstRetrievedAt: this.formatRequiredTimestamp(row.first_retrieved_at),
+      lastRetrievedAt: this.formatRequiredTimestamp(row.last_retrieved_at),
+      lastSeenAt: this.formatRequiredTimestamp(row.last_seen_at),
+      timesSeen: Number(row.times_seen) || 1,
+      contentHash: row.content_hash,
+    };
+  }
+
+  private buildDocumentMetadata(
+    document: ExtractedDocument,
+  ): Record<string, unknown> {
+    return {
+      sourceScore: document.score,
+      contentLength: document.contentLength,
+      structuredSummary: document.structuredSummary,
+      weatherSnapshot: document.weatherSnapshot,
+    };
+  }
+
+  private mergeSearchQueries(existing: string[], query: string): string[] {
+    return [...new Set([query, ...existing].filter(Boolean))].slice(0, 20);
   }
 
   private tokenize(value: string): string[] {
@@ -420,8 +1202,49 @@ export class KnowledgeStoreService {
     return Math.max(0, Math.min(1, Number(value.toFixed(4))));
   }
 
+  private toNumber(value: number | string | null | undefined): number {
+    const numberValue =
+      typeof value === 'number' ? value : Number.parseFloat(String(value ?? 0));
+
+    return Number.isFinite(numberValue) ? numberValue : 0;
+  }
+
+  private formatTimestamp(value: Date | string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    const date = value instanceof Date ? value : new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  }
+
+  private formatRequiredTimestamp(value: Date | string): string {
+    return this.formatTimestamp(value) ?? new Date().toISOString();
+  }
+
   private escapeForRegex(value: string): string {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private escapeLikePattern(value: string): string {
+    return value.replace(/[\\%_]/g, (match) => `\\${match}`);
+  }
+
+  private safeDatabaseLocation(databaseUrl: string): string {
+    try {
+      const parsed = new URL(databaseUrl);
+
+      return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+    } catch {
+      return 'postgresql://<configured>';
+    }
+  }
+
+  private isUuid(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    );
   }
 
   private getErrorMessage(error: unknown): string {

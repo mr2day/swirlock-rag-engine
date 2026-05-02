@@ -12,7 +12,7 @@ Implemented:
 - contract-shaped validation and error envelopes
 - deterministic retrieval-mode policy
 - Utility LLM Host WebSocket client for retrieval support
-- file-backed local knowledge store
+- PostgreSQL-backed local knowledge store with JSON fallback when no database URL is configured
 - live Exa search-then-extract wiring
 - cache persistence from successful live extraction
 - evidence chunk ranking, deduplication, and lightweight synthesis
@@ -28,7 +28,7 @@ Phase one uses deterministic retrieval policy plus optional Utility LLM Host sup
 - Image URL inputs can be sent to the Utility LLM Host for retrieval-oriented observations.
 - Image ID inputs are still reference-level until RAG has a shared media resolver.
 
-The local knowledge store is lexical, not vector-backed yet. It is still useful as a durable web-derived cache and is intentionally separate from chatbot memory.
+The local knowledge store is PostgreSQL-backed when `RAG_DATABASE_URL` is configured. It uses PostgreSQL full-text search today and includes nullable `pgvector` embedding fields for the future embedding pipeline. It is intentionally separate from chatbot memory.
 
 ## Runtime Configuration
 
@@ -44,17 +44,19 @@ UTILITY_LLM_TIMEOUT_MS=30000
 UTILITY_LLM_RETRIES=1
 ```
 
-The local store defaults to:
+The preferred local store is PostgreSQL:
 
 ```text
-data/knowledge-store.json
+Database: swirlock_rag
+Role: swirlock_rag
+Tablespace: D:\swirlock\postgresql\tablespaces\rag_knowledge
 ```
 
-`data/` is ignored because it is runtime state.
+If `RAG_DATABASE_URL` is omitted, the service falls back to `data/knowledge-store.json`. `data/` is ignored because it is runtime state.
 
 ## Next Sensible Work
 
-- Replace lexical local retrieval with embedding-backed retrieval once the Embedding Service contract exists.
+- Add embedding generation and vector retrieval once the Embedding Service contract exists.
 - Add OpenAPI-generated DTO parity or schema validation if the contracts stabilize.
 - Broaden e2e coverage for `POST /v2/retrieval/evidence`.
 - Add a small seed/import command for local knowledge documents.
