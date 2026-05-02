@@ -54,6 +54,7 @@ Preferred direction:
 Work:
 
 - Choose and document the PostgreSQL data directory on the 1TB SSD.
+- Use `scripts/setup-rag-postgres.ps1` for local PostgreSQL role, database, tablespace, extension, and `.env.local` setup.
 - Add database connection config and migrations.
 - Model documents, chunks, sources, retrieval runs, and embeddings.
 - Keep the existing JSON store only as a temporary migration/source import path if useful.
