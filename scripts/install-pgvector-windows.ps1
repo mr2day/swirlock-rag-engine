@@ -16,11 +16,20 @@ function Assert-Admin {
 }
 
 function Find-VsDevCmd {
-  $candidates = Get-ChildItem `
-    "C:\Program Files\Microsoft Visual Studio\2022" `
-    -Recurse `
-    -Filter VsDevCmd.bat `
-    -ErrorAction SilentlyContinue
+  $roots = @(
+    "C:\Program Files\Microsoft Visual Studio\2022",
+    "C:\Program Files (x86)\Microsoft Visual Studio\2022"
+  )
+
+  $candidates = $roots |
+    Where-Object { Test-Path $_ } |
+    ForEach-Object {
+      Get-ChildItem `
+        $_ `
+        -Recurse `
+        -Filter VsDevCmd.bat `
+        -ErrorAction SilentlyContinue
+    }
 
   return $candidates | Select-Object -First 1 -ExpandProperty FullName
 }
@@ -35,16 +44,22 @@ if (Test-Path $vectorControl) {
   exit 0
 }
 
-if ($InstallBuildTools) {
+$vsDevCmd = Find-VsDevCmd
+
+if (-not $vsDevCmd -and $InstallBuildTools) {
+  Write-Output "Installing Visual Studio C++ Build Tools..."
+
   winget install `
     --id Microsoft.VisualStudio.2022.BuildTools `
     -e `
+    --disable-interactivity `
     --accept-package-agreements `
     --accept-source-agreements `
     --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+
+  $vsDevCmd = Find-VsDevCmd
 }
 
-$vsDevCmd = Find-VsDevCmd
 if (-not $vsDevCmd) {
   throw @"
 Visual Studio C++ Build Tools were not found.
@@ -83,4 +98,3 @@ if (-not (Test-Path $vectorControl)) {
 }
 
 Write-Output "pgvector installed at $vectorControl"
-
