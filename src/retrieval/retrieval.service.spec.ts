@@ -221,6 +221,7 @@ describe('RetrievalService', () => {
       'latest RAG evaluation methods',
       'general',
       expect.any(String),
+      'low',
     );
     expect(result.normalizedQuery.retrievalMode).toBe('live_web');
     expect(result.evidenceChunks[0]?.sourceType).toBe('web');

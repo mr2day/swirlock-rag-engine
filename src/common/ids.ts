@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 let lastTimestamp = 0;
 let sequence = 0;
@@ -30,6 +30,19 @@ export function createUuidV7(): string {
   for (let index = 9; index < 16; index += 1) {
     bytes[index] = random[index - 8];
   }
+
+  return [...bytes]
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('')
+    .replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5');
+}
+
+export function createDeterministicUuid(seed: string): string {
+  const hash = createHash('sha256').update(seed).digest();
+  const bytes = new Uint8Array(hash.subarray(0, 16));
+
+  bytes[6] = (bytes[6] & 0x0f) | 0x50;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
 
   return [...bytes]
     .map((byte) => byte.toString(16).padStart(2, '0'))

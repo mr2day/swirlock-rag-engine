@@ -13,9 +13,11 @@ Implemented:
 - deterministic retrieval-mode policy
 - Utility LLM Host WebSocket client for retrieval support
 - PostgreSQL-backed local knowledge store with JSON fallback when no database URL is configured
+- canonical URL deduplication, deterministic chunk IDs, refresh metadata, and pending embedding jobs
 - live Exa search-then-extract wiring
 - cache persistence from successful live extraction
 - evidence chunk ranking, deduplication, and lightweight synthesis
+- baseline retrieval evaluation command
 - PM2-ready `ecosystem.config.cjs`
 
 ## Current Retrieval Strategy
@@ -28,7 +30,7 @@ Phase one uses deterministic retrieval policy plus optional Utility LLM Host sup
 - Image URL inputs can be sent to the Utility LLM Host for retrieval-oriented observations.
 - Image ID inputs are still reference-level until RAG has a shared media resolver.
 
-The local knowledge store is PostgreSQL-backed when `RAG_DATABASE_URL` is configured. It uses PostgreSQL full-text search today and includes nullable `pgvector` embedding fields for the future embedding pipeline. It is intentionally separate from chatbot memory.
+The local knowledge store is PostgreSQL-backed when `RAG_DATABASE_URL` is configured. It uses PostgreSQL full-text search today, chunks extracted documents, records refresh metadata, queues pending embedding jobs, and includes nullable `pgvector` embedding fields for the future embedding pipeline. It is intentionally separate from chatbot memory.
 
 ## Runtime Configuration
 
@@ -57,6 +59,7 @@ If `RAG_DATABASE_URL` is omitted, the service falls back to `data/knowledge-stor
 ## Next Sensible Work
 
 - Add embedding generation and vector retrieval once the Embedding Service contract exists.
+- Add a worker that consumes `rag_embedding_jobs`.
+- Expand the golden retrieval evaluation set with real known-answer cases.
 - Add OpenAPI-generated DTO parity or schema validation if the contracts stabilize.
 - Broaden e2e coverage for `POST /v2/retrieval/evidence`.
-- Add a small seed/import command for local knowledge documents.

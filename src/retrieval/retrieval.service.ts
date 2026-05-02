@@ -335,6 +335,7 @@ export class RetrievalService {
         queryResolution?.effectiveQuery ?? effectiveQuery,
         intent,
         retrievedAt,
+        request.query.freshness,
       );
     } catch (error) {
       const message =

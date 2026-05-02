@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname } from 'node:path';
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
@@ -8,6 +7,17 @@ import { createUuidV7 } from '../common/ids';
 import { serviceRuntimeConfig } from '../config/service-config';
 import type { ExtractedDocument } from '../search/search.types';
 import {
+  canonicalizeUrl,
+  chunkKnowledgeContent,
+  computeRefreshPolicy,
+  createStableDocumentId,
+  getSourceDomain,
+  hashText,
+  scoreSourceQuality,
+  selectDiverseResults,
+  type KnowledgeChunk,
+} from './knowledge-indexing';
+import {
   KNOWLEDGE_STORE_MIGRATIONS,
   KNOWLEDGE_STORE_SCHEMA_VERSION,
 } from './knowledge-store.schema';
@@ -16,8 +26,11 @@ import type { RetrievalFreshness, RetrievalMode } from './retrieval.types';
 const STORE_SCHEMA_VERSION = 1;
 const MAX_STORED_DOCUMENTS = 500;
 const MAX_STORED_CONTENT_LENGTH = 12000;
+const MAX_POSTGRES_CONTENT_LENGTH = 80000;
 const SEARCH_CONTENT_WINDOW = 5000;
 const DATABASE_STATEMENT_TIMEOUT_MS = 15000;
+const POSTGRES_CANDIDATE_MULTIPLIER = 5;
+const POSTGRES_MIN_CANDIDATES = 25;
 
 export type KnowledgeStoreKind = 'postgresql' | 'json_file';
 
@@ -25,6 +38,8 @@ export interface KnowledgeStoreDocument {
   evidenceId: string;
   sourceTitle: string;
   sourceUrl: string | null;
+  canonicalUrl?: string | null;
+  sourceDomain?: string | null;
   content: string;
   excerpt: string;
   providerSummary: string | null;
@@ -36,6 +51,8 @@ export interface KnowledgeStoreDocument {
   lastSeenAt: string;
   timesSeen: number;
   contentHash: string;
+  chunkIndex?: number;
+  sourceQualityScore?: number;
 }
 
 export interface KnowledgeStoreSearchResult {
@@ -76,12 +93,16 @@ interface KnowledgeStoreFile {
 interface ExistingDocumentRow extends QueryResultRow {
   id: string;
   search_queries: string[];
+  times_seen: number;
 }
 
 interface ChunkRow extends QueryResultRow {
   evidence_id: string;
+  chunk_index: number;
   source_title: string;
   source_url: string | null;
+  canonical_url?: string | null;
+  source_domain?: string | null;
   content: string;
   excerpt: string;
   provider_summary: string | null;
@@ -95,6 +116,7 @@ interface ChunkRow extends QueryResultRow {
   content_hash: string;
   lexical_rank?: number | string | null;
   trigram_rank?: number | string | null;
+  source_quality_score?: number | string | null;
   exact_title?: boolean | null;
   exact_excerpt?: boolean | null;
   exact_content?: boolean | null;
@@ -175,6 +197,7 @@ export class KnowledgeStoreService implements OnModuleDestroy {
     query: string,
     intent: string,
     retrievedAt: string,
+    freshness: RetrievalFreshness = 'medium',
   ): Promise<KnowledgeStoreDocument[]> {
     if (this.getDatabaseUrl()) {
       return this.upsertPostgresDocuments(
@@ -182,6 +205,7 @@ export class KnowledgeStoreService implements OnModuleDestroy {
         query,
         intent,
         retrievedAt,
+        freshness,
       );
     }
 
@@ -262,6 +286,10 @@ INSERT INTO rag_retrieval_runs (
 
     await this.ensureDatabase();
 
+    const candidateLimit = Math.max(
+      POSTGRES_MIN_CANDIDATES,
+      maxResults * POSTGRES_CANDIDATE_MULTIPLIER,
+    );
     const result = await this.getPool().query<ChunkRow>(
       `
 WITH retrieval_query AS (
@@ -269,8 +297,11 @@ WITH retrieval_query AS (
 )
 SELECT
   c.id::text AS evidence_id,
+  c.chunk_index,
   c.source_title,
   c.source_url::text AS source_url,
+  d.canonical_url::text AS canonical_url,
+  c.source_domain,
   c.content,
   c.excerpt,
   c.provider_summary,
@@ -288,10 +319,12 @@ SELECT
     similarity(c.excerpt, $1),
     similarity(left(c.content, $4), $1)
   ) AS trigram_rank,
+  c.source_quality_score,
   lower(c.source_title) LIKE lower($2) ESCAPE '\\' AS exact_title,
   lower(c.excerpt) LIKE lower($2) ESCAPE '\\' AS exact_excerpt,
   lower(left(c.content, $4)) LIKE lower($2) ESCAPE '\\' AS exact_content
 FROM rag_document_chunks c
+JOIN rag_source_documents d ON d.id = c.document_id
 CROSS JOIN retrieval_query
 WHERE
   c.search_vector @@ retrieval_query.tsquery
@@ -318,23 +351,39 @@ LIMIT $3
       [
         normalizedQuery,
         `%${this.escapeLikePattern(normalizedQuery)}%`,
-        Math.max(1, maxResults),
+        candidateLimit,
         SEARCH_CONTENT_WINDOW,
       ],
     );
 
-    return result.rows.map((row) => {
+    const scoredResults = result.rows.map((row) => {
       const document = this.mapChunkRowToDocument(row);
       const freshnessScore = this.scoreFreshness(document, freshness);
       const relevanceScore = this.scorePostgresRelevance(row);
+      const sourceQualityScore = this.toNumber(row.source_quality_score);
+      const score = this.scoreHybridCandidate({
+        relevanceScore,
+        freshnessScore,
+        sourceQualityScore,
+        freshness,
+      });
 
       return {
         document,
         relevanceScore,
         freshnessScore,
-        score: relevanceScore * 100 + freshnessScore * 8,
+        score,
       };
     });
+
+    return selectDiverseResults(
+      scoredResults,
+      maxResults,
+      (result) =>
+        result.document.sourceDomain ??
+        getSourceDomain(result.document.sourceUrl),
+      (result) => result.score,
+    );
   }
 
   private async upsertPostgresDocuments(
@@ -342,6 +391,7 @@ LIMIT $3
     query: string,
     intent: string,
     retrievedAt: string,
+    freshness: RetrievalFreshness,
   ): Promise<KnowledgeStoreDocument[]> {
     if (documents.length === 0) {
       return [];
@@ -356,7 +406,10 @@ LIMIT $3
       await client.query('BEGIN');
 
       for (const document of documents) {
-        const content = this.limitText(document.content || document.excerpt);
+        const content = this.limitText(
+          document.content || document.excerpt,
+          MAX_POSTGRES_CONTENT_LENGTH,
+        );
 
         if (!content.trim()) {
           continue;
@@ -371,6 +424,7 @@ LIMIT $3
         );
         const existing = await this.findExistingPostgresDocument(
           client,
+          normalizedDocument.canonicalUrl ?? null,
           normalizedDocument.sourceUrl,
           normalizedDocument.contentHash,
         );
@@ -382,11 +436,13 @@ LIMIT $3
               query,
               document,
               retrievedAt,
+              freshness,
             )
           : await this.insertPostgresDocument(
               client,
               normalizedDocument,
               document,
+              freshness,
             );
 
         upserted.push(saved);
@@ -407,8 +463,24 @@ LIMIT $3
     client: PoolClient,
     document: KnowledgeStoreDocument,
     extractedDocument: ExtractedDocument,
+    freshness: RetrievalFreshness,
   ): Promise<KnowledgeStoreDocument> {
     const metadata = this.buildDocumentMetadata(extractedDocument);
+    const chunks = chunkKnowledgeContent({
+      documentId: document.evidenceId,
+      content: document.content,
+    });
+    const refreshPolicy = computeRefreshPolicy({
+      publishedAt: document.publishedAt,
+      retrievedAt: document.lastRetrievedAt,
+      freshnessIntent: freshness,
+      sourceUrl: document.sourceUrl,
+    });
+    const rawContentHash = hashText(
+      extractedDocument.content ||
+        extractedDocument.excerpt ||
+        document.content,
+    );
 
     await client.query(
       `
@@ -416,6 +488,9 @@ INSERT INTO rag_source_documents (
   id,
   source_title,
   source_url,
+  canonical_url,
+  source_domain,
+  source_kind,
   provider_summary,
   intent,
   search_queries,
@@ -425,13 +500,25 @@ INSERT INTO rag_source_documents (
   last_seen_at,
   times_seen,
   content_hash,
+  raw_content_hash,
+  cleaned_content_hash,
+  chunk_count,
+  extraction_provider,
+  refresh_after,
+  refresh_reason,
+  last_refresh_status,
   metadata
-) VALUES ($1, $2, $3, $4, $5, $6::text[], $7, $8, $9, $10, $11, $12, $13::jsonb)
+) VALUES (
+  $1, $2, $3, $4, $5, 'web', $6, $7, $8::text[], $9, $10, $11, $12, $13,
+  $14, $15, $16, $17, 'exa', $18, $19, 'ok', $20::jsonb
+)
 `,
       [
         document.evidenceId,
         document.sourceTitle,
         document.sourceUrl,
+        document.canonicalUrl,
+        document.sourceDomain,
         document.providerSummary,
         document.intent,
         document.searchQueries,
@@ -441,18 +528,42 @@ INSERT INTO rag_source_documents (
         document.lastSeenAt,
         document.timesSeen,
         document.contentHash,
+        rawContentHash,
+        document.contentHash,
+        Math.max(1, chunks.length),
+        refreshPolicy.refreshAfter,
+        refreshPolicy.refreshReason,
         JSON.stringify(metadata),
       ],
     );
 
-    await client.query(
-      `
+    await this.insertPostgresChunks(client, document, chunks, metadata);
+
+    return this.mapPreparedChunkToDocument(document, chunks[0] ?? null);
+  }
+
+  private async insertPostgresChunks(
+    client: PoolClient,
+    document: KnowledgeStoreDocument,
+    chunks: KnowledgeChunk[],
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    const sourceQualityScore = scoreSourceQuality({
+      sourceUrl: document.sourceUrl,
+      sourceTitle: document.sourceTitle,
+    });
+
+    for (const chunk of chunks) {
+      await client.query(
+        `
 INSERT INTO rag_document_chunks (
   id,
   document_id,
   chunk_index,
+  stable_chunk_key,
   source_title,
   source_url,
+  source_domain,
   content,
   excerpt,
   provider_summary,
@@ -464,52 +575,131 @@ INSERT INTO rag_document_chunks (
   last_seen_at,
   times_seen,
   content_hash,
+  start_offset,
+  end_offset,
+  source_quality_score,
   search_vector,
   metadata
 ) VALUES (
   $1,
   $2,
-  0,
   $3,
   $4,
   $5,
   $6,
   $7,
   $8,
-  $9::text[],
+  $9,
   $10,
   $11,
-  $12,
+  $12::text[],
   $13,
   $14,
   $15,
-  setweight(to_tsvector('english', coalesce($3, '')), 'A')
-    || setweight(to_tsvector('english', coalesce($6, '')), 'B')
-    || setweight(to_tsvector('english', coalesce($5, '')), 'C'),
-  $16::jsonb
+  $16,
+  $17,
+  $18,
+  $19,
+  $20,
+  $21,
+  setweight(to_tsvector('english', coalesce($5, '')), 'A')
+    || setweight(to_tsvector('english', coalesce($9, '')), 'B')
+    || setweight(to_tsvector('english', coalesce($8, '')), 'C'),
+  $22::jsonb
 )
+ON CONFLICT (stable_chunk_key) WHERE stable_chunk_key IS NOT NULL DO UPDATE
+SET
+  source_title = EXCLUDED.source_title,
+  source_url = EXCLUDED.source_url,
+  source_domain = EXCLUDED.source_domain,
+  content = EXCLUDED.content,
+  excerpt = EXCLUDED.excerpt,
+  provider_summary = EXCLUDED.provider_summary,
+  intent = EXCLUDED.intent,
+  search_queries = EXCLUDED.search_queries,
+  published_at = EXCLUDED.published_at,
+  last_retrieved_at = EXCLUDED.last_retrieved_at,
+  last_seen_at = EXCLUDED.last_seen_at,
+  times_seen = rag_document_chunks.times_seen + 1,
+  content_hash = EXCLUDED.content_hash,
+  start_offset = EXCLUDED.start_offset,
+  end_offset = EXCLUDED.end_offset,
+  source_quality_score = EXCLUDED.source_quality_score,
+  search_vector = EXCLUDED.search_vector,
+  needs_embedding = rag_document_chunks.embedding IS NULL,
+  metadata = rag_document_chunks.metadata || EXCLUDED.metadata,
+  updated_at = now()
 `,
-      [
-        document.evidenceId,
-        document.evidenceId,
-        document.sourceTitle,
-        document.sourceUrl,
-        document.content,
-        document.excerpt,
-        document.providerSummary,
-        document.intent,
-        document.searchQueries,
-        document.publishedAt,
-        document.firstRetrievedAt,
-        document.lastRetrievedAt,
-        document.lastSeenAt,
-        document.timesSeen,
-        document.contentHash,
-        JSON.stringify(metadata),
-      ],
-    );
+        [
+          chunk.id,
+          document.evidenceId,
+          chunk.index,
+          this.buildStableChunkKey(document, chunk),
+          document.sourceTitle,
+          document.sourceUrl,
+          document.sourceDomain,
+          chunk.content,
+          chunk.excerpt,
+          document.providerSummary,
+          document.intent,
+          document.searchQueries,
+          document.publishedAt,
+          document.firstRetrievedAt,
+          document.lastRetrievedAt,
+          document.lastSeenAt,
+          document.timesSeen,
+          chunk.contentHash,
+          chunk.startOffset,
+          chunk.endOffset,
+          sourceQualityScore,
+          JSON.stringify({
+            ...metadata,
+            chunking: {
+              algorithm: 'fixed-window-sentence-boundary-v1',
+              startOffset: chunk.startOffset,
+              endOffset: chunk.endOffset,
+            },
+          }),
+        ],
+      );
 
-    return document;
+      await client.query(
+        `
+INSERT INTO rag_embedding_jobs (id, chunk_id, status, embedding_model)
+VALUES ($1, $2, 'pending', 'unconfigured')
+ON CONFLICT (chunk_id, embedding_model) DO UPDATE
+SET
+  status = CASE
+    WHEN rag_embedding_jobs.status = 'done' THEN rag_embedding_jobs.status
+    ELSE 'pending'
+  END,
+  updated_at = now()
+`,
+        [createUuidV7(), chunk.id],
+      );
+    }
+  }
+
+  private mapPreparedChunkToDocument(
+    document: KnowledgeStoreDocument,
+    chunk: KnowledgeChunk | null,
+  ): KnowledgeStoreDocument {
+    if (!chunk) {
+      return document;
+    }
+
+    return {
+      ...document,
+      evidenceId: chunk.id,
+      content: chunk.content,
+      excerpt: chunk.excerpt,
+      contentHash: chunk.contentHash,
+      chunkIndex: chunk.index,
+      sourceQualityScore: scoreSourceQuality({
+        sourceUrl: document.sourceUrl,
+        sourceTitle: document.sourceTitle,
+      }),
+    };
   }
 
   private async updatePostgresDocument(
@@ -519,12 +709,36 @@ INSERT INTO rag_document_chunks (
     query: string,
     extractedDocument: ExtractedDocument,
     retrievedAt: string,
+    freshness: RetrievalFreshness,
   ): Promise<KnowledgeStoreDocument> {
     const searchQueries = this.mergeSearchQueries(
       existing.search_queries,
       query,
     );
     const metadata = this.buildDocumentMetadata(extractedDocument);
+    const document: KnowledgeStoreDocument = {
+      ...incoming,
+      evidenceId: existing.id,
+      searchQueries,
+      timesSeen: existing.times_seen + 1,
+      lastRetrievedAt: retrievedAt,
+      lastSeenAt: retrievedAt,
+    };
+    const chunks = chunkKnowledgeContent({
+      documentId: document.evidenceId,
+      content: document.content,
+    });
+    const refreshPolicy = computeRefreshPolicy({
+      publishedAt: document.publishedAt,
+      retrievedAt,
+      freshnessIntent: freshness,
+      sourceUrl: document.sourceUrl,
+    });
+    const rawContentHash = hashText(
+      extractedDocument.content ||
+        extractedDocument.excerpt ||
+        document.content,
+    );
 
     await client.query(
       `
@@ -532,40 +746,8 @@ UPDATE rag_source_documents
 SET
   source_title = $2,
   source_url = COALESCE($3, source_url),
-  provider_summary = COALESCE($4, provider_summary),
-  intent = $5,
-  search_queries = $6::text[],
-  published_at = COALESCE($7, published_at),
-  last_retrieved_at = $8,
-  last_seen_at = $8,
-  times_seen = times_seen + 1,
-  content_hash = $9,
-  metadata = metadata || $10::jsonb,
-  updated_at = now()
-WHERE id = $1
-`,
-      [
-        existing.id,
-        incoming.sourceTitle,
-        incoming.sourceUrl,
-        incoming.providerSummary,
-        incoming.intent,
-        searchQueries,
-        incoming.publishedAt,
-        retrievedAt,
-        incoming.contentHash,
-        JSON.stringify(metadata),
-      ],
-    );
-
-    const chunkResult = await client.query<ChunkRow>(
-      `
-UPDATE rag_document_chunks
-SET
-  source_title = $2,
-  source_url = COALESCE($3, source_url),
-  content = $4,
-  excerpt = $5,
+  canonical_url = COALESCE($4, canonical_url),
+  source_domain = COALESCE($5, source_domain),
   provider_summary = COALESCE($6, provider_summary),
   intent = $7,
   search_queries = $8::text[],
@@ -574,142 +756,70 @@ SET
   last_seen_at = $10,
   times_seen = times_seen + 1,
   content_hash = $11,
-  search_vector =
-    setweight(to_tsvector('english', coalesce($2, '')), 'A')
-    || setweight(to_tsvector('english', coalesce($5, '')), 'B')
-    || setweight(to_tsvector('english', coalesce($4, '')), 'C'),
-  metadata = metadata || $12::jsonb,
+  raw_content_hash = $12,
+  cleaned_content_hash = $13,
+  chunk_count = $14,
+  extraction_provider = 'exa',
+  refresh_after = $15,
+  refresh_reason = $16,
+  last_refresh_status = 'ok',
+  metadata = metadata || $17::jsonb,
   updated_at = now()
-WHERE document_id = $1 AND chunk_index = 0
-RETURNING
-  id::text AS evidence_id,
-  source_title,
-  source_url::text AS source_url,
-  content,
-  excerpt,
-  provider_summary,
-  intent,
-  search_queries,
-  published_at,
-  first_retrieved_at,
-  last_retrieved_at,
-  last_seen_at,
-  times_seen,
-  content_hash
+WHERE id = $1
 `,
       [
         existing.id,
-        incoming.sourceTitle,
-        incoming.sourceUrl,
-        incoming.content,
-        incoming.excerpt,
-        incoming.providerSummary,
-        incoming.intent,
+        document.sourceTitle,
+        document.sourceUrl,
+        document.canonicalUrl,
+        document.sourceDomain,
+        document.providerSummary,
+        document.intent,
         searchQueries,
-        incoming.publishedAt,
+        document.publishedAt,
         retrievedAt,
-        incoming.contentHash,
+        document.contentHash,
+        rawContentHash,
+        document.contentHash,
+        Math.max(1, chunks.length),
+        refreshPolicy.refreshAfter,
+        refreshPolicy.refreshReason,
         JSON.stringify(metadata),
       ],
     );
-
-    if (chunkResult.rows[0]) {
-      return this.mapChunkRowToDocument(chunkResult.rows[0]);
-    }
-
-    const replacement = {
-      ...incoming,
-      evidenceId: createUuidV7(),
-      searchQueries,
-    };
 
     await client.query(
-      `
-INSERT INTO rag_document_chunks (
-  id,
-  document_id,
-  chunk_index,
-  source_title,
-  source_url,
-  content,
-  excerpt,
-  provider_summary,
-  intent,
-  search_queries,
-  published_at,
-  first_retrieved_at,
-  last_retrieved_at,
-  last_seen_at,
-  times_seen,
-  content_hash,
-  search_vector,
-  metadata
-) VALUES (
-  $1,
-  $2,
-  0,
-  $3,
-  $4,
-  $5,
-  $6,
-  $7,
-  $8,
-  $9::text[],
-  $10,
-  $11,
-  $12,
-  $13,
-  $14,
-  $15,
-  setweight(to_tsvector('english', coalesce($3, '')), 'A')
-    || setweight(to_tsvector('english', coalesce($6, '')), 'B')
-    || setweight(to_tsvector('english', coalesce($5, '')), 'C'),
-  $16::jsonb
-)
-`,
-      [
-        replacement.evidenceId,
-        existing.id,
-        replacement.sourceTitle,
-        replacement.sourceUrl,
-        replacement.content,
-        replacement.excerpt,
-        replacement.providerSummary,
-        replacement.intent,
-        replacement.searchQueries,
-        replacement.publishedAt,
-        replacement.firstRetrievedAt,
-        replacement.lastRetrievedAt,
-        replacement.lastSeenAt,
-        replacement.timesSeen,
-        replacement.contentHash,
-        JSON.stringify(metadata),
-      ],
+      'DELETE FROM rag_document_chunks WHERE document_id = $1',
+      [existing.id],
     );
+    await this.insertPostgresChunks(client, document, chunks, metadata);
 
-    return replacement;
+    return this.mapPreparedChunkToDocument(document, chunks[0] ?? null);
   }
 
   private async findExistingPostgresDocument(
     client: PoolClient,
+    canonicalUrl: string | null,
     sourceUrl: string | null,
     contentHash: string,
   ): Promise<ExistingDocumentRow | null> {
     const result = await client.query<ExistingDocumentRow>(
       `
-SELECT id::text, search_queries
+SELECT id::text, search_queries, times_seen
 FROM rag_source_documents
 WHERE
-  ($1::citext IS NOT NULL AND source_url = $1::citext)
-  OR content_hash = $2
+  ($1::citext IS NOT NULL AND canonical_url = $1::citext)
+  OR ($2::citext IS NOT NULL AND source_url = $2::citext)
+  OR content_hash = $3
 ORDER BY
   CASE
-    WHEN $1::citext IS NOT NULL AND source_url = $1::citext THEN 0
-    ELSE 1
+    WHEN $1::citext IS NOT NULL AND canonical_url = $1::citext THEN 0
+    WHEN $2::citext IS NOT NULL AND source_url = $2::citext THEN 1
+    ELSE 2
   END
 LIMIT 1
 `,
-      [sourceUrl, contentHash],
+      [canonicalUrl, sourceUrl, contentHash],
     );
 
     return result.rows[0] ?? null;
@@ -959,10 +1069,21 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
     intent: string,
     retrievedAt: string,
   ): KnowledgeStoreDocument {
+    const sourceUrl = document.url || null;
+    const canonicalUrl = canonicalizeUrl(sourceUrl);
+    const contentHash = hashText(content);
+    const sourceTitle = document.title || document.url;
+
     return {
-      evidenceId: createUuidV7(),
-      sourceTitle: document.title || document.url,
-      sourceUrl: document.url || null,
+      evidenceId: createStableDocumentId({
+        canonicalUrl,
+        contentHash,
+        title: sourceTitle,
+      }),
+      sourceTitle,
+      sourceUrl,
+      canonicalUrl,
+      sourceDomain: getSourceDomain(canonicalUrl),
       content,
       excerpt: this.limitText(document.excerpt || content, 1500),
       providerSummary: document.providerSummary,
@@ -973,7 +1094,7 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
       lastRetrievedAt: retrievedAt,
       lastSeenAt: retrievedAt,
       timesSeen: 1,
-      contentHash: this.hashText(content),
+      contentHash,
     };
   }
 
@@ -1065,6 +1186,30 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
     );
   }
 
+  private scoreHybridCandidate(input: {
+    relevanceScore: number;
+    freshnessScore: number;
+    sourceQualityScore: number;
+    freshness: RetrievalFreshness;
+  }): number {
+    const freshnessWeight =
+      input.freshness === 'realtime'
+        ? 0.35
+        : input.freshness === 'high'
+          ? 0.28
+          : input.freshness === 'medium'
+            ? 0.18
+            : 0.08;
+    const sourceQualityWeight = 0.1;
+    const relevanceWeight = 1 - freshnessWeight - sourceQualityWeight;
+
+    return this.roundScore(
+      input.relevanceScore * relevanceWeight +
+        input.freshnessScore * freshnessWeight +
+        input.sourceQualityScore * sourceQualityWeight,
+    );
+  }
+
   private scoreFreshness(
     document: KnowledgeStoreDocument,
     freshness: RetrievalFreshness,
@@ -1099,6 +1244,8 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
       evidenceId: row.evidence_id,
       sourceTitle: row.source_title,
       sourceUrl: row.source_url,
+      canonicalUrl: row.canonical_url,
+      sourceDomain: row.source_domain,
       content: row.content,
       excerpt: row.excerpt,
       providerSummary: row.provider_summary,
@@ -1112,6 +1259,8 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
       lastSeenAt: this.formatRequiredTimestamp(row.last_seen_at),
       timesSeen: Number(row.times_seen) || 1,
       contentHash: row.content_hash,
+      chunkIndex: Number(row.chunk_index) || 0,
+      sourceQualityScore: this.toNumber(row.source_quality_score),
     };
   }
 
@@ -1128,6 +1277,13 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
 
   private mergeSearchQueries(existing: string[], query: string): string[] {
     return [...new Set([query, ...existing].filter(Boolean))].slice(0, 20);
+  }
+
+  private buildStableChunkKey(
+    document: KnowledgeStoreDocument,
+    chunk: KnowledgeChunk,
+  ): string {
+    return `${document.canonicalUrl || document.contentHash}:${chunk.index}:${chunk.contentHash}`;
   }
 
   private tokenize(value: string): string[] {
@@ -1192,10 +1348,6 @@ CREATE TABLE IF NOT EXISTS rag_schema_migrations (
     }
 
     return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
-  }
-
-  private hashText(value: string): string {
-    return createHash('sha256').update(value).digest('hex');
   }
 
   private roundScore(value: number): number {

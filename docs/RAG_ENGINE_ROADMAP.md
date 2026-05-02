@@ -70,93 +70,98 @@ Acceptance criteria:
 
 ## 3. Ingestion And Indexing Pipeline
 
-Status: not started
+Status: baseline implemented
 
 Goal: turn live web results and manually seeded material into normalized, deduplicated, retrievable
 knowledge.
 
 Work:
 
-- Canonicalize URLs and source IDs.
-- Hash raw and cleaned content for deduplication.
-- Store extraction provenance and provider metadata.
-- Chunk documents with stable chunk IDs.
-- Extract title, publication time, source type, and freshness metadata.
-- Add embedding jobs for new or changed chunks.
-- Add refresh policy for stale or volatile sources.
-- Add a seed/import command for local documents and known URLs.
+- [x] Canonicalize URLs and source IDs.
+- [x] Hash raw and cleaned content for deduplication.
+- [x] Store extraction provenance and provider metadata.
+- [x] Chunk documents with stable chunk IDs.
+- [x] Extract title, publication time, source type, and freshness metadata.
+- [x] Add embedding jobs for new or changed chunks.
+- [x] Add refresh policy for stale or volatile sources.
+- [x] Add a JSON cache import command.
+- [ ] Add a seed/import command for arbitrary local documents and known URLs.
 
 Acceptance criteria:
 
-- Repeated web results update existing records rather than creating duplicates.
-- Chunks can be re-indexed deterministically after code changes.
-- Failed extraction/indexing jobs are visible and retryable.
+- [x] Repeated web results update existing records rather than creating duplicates.
+- [x] Chunks can be re-indexed deterministically after code changes.
+- [x] Failed embedding/indexing work is visible through `rag_embedding_jobs`.
+- [ ] Failed provider extraction jobs are persisted separately from retrieval diagnostics.
 
 ## 4. Hybrid Retrieval
 
-Status: not started
+Status: partial baseline implemented
 
 Goal: retrieve better evidence by combining lexical matching, vector similarity, freshness, and source
 quality.
 
 Work:
 
-- Implement PostgreSQL full-text retrieval.
-- Implement vector retrieval through `pgvector`.
-- Blend lexical score, vector score, freshness score, and source quality.
-- Add source-quality heuristics per domain/source type.
-- Add diversity selection with MMR or equivalent.
-- Add reranking support, initially deterministic and later Utility LLM assisted if useful.
-- Preserve evidence provenance and scores in the contract response.
+- [x] Implement PostgreSQL full-text retrieval.
+- [ ] Implement vector retrieval through `pgvector`; blocked until the Embedding Service contract/worker exists.
+- [x] Blend lexical/trigram score, freshness score, and source quality.
+- [x] Add source-quality heuristics per domain/source type.
+- [x] Add diversity selection with an MMR-style domain penalty.
+- [ ] Add reranking support, initially deterministic and later Utility LLM assisted if useful.
+- [x] Preserve evidence provenance and scores in the contract response.
 
 Acceptance criteria:
 
-- Retrieval can return relevant older local evidence for low-freshness queries.
-- Retrieval prefers fresh/live evidence for high and realtime queries.
-- Duplicate or near-duplicate chunks are suppressed.
-- Result sets include source diversity when multiple sources are available.
+- [x] Retrieval can return relevant older local evidence for low-freshness queries.
+- [x] Retrieval prefers fresh/live evidence for high and realtime queries.
+- [x] Duplicate or near-duplicate chunks are suppressed.
+- [x] Result sets include source diversity when multiple sources are available.
+- [ ] Vector similarity contributes to ranking once embeddings are produced.
 
 ## 5. Evaluations
 
-Status: not started
+Status: baseline implemented
 
 Goal: make retrieval quality measurable before changing ranking, storage, or model-support behavior.
 
 Work:
 
-- Create a golden query set with expected sources or facts.
-- Track recall@k for known-answer retrieval.
-- Track citation/source accuracy.
-- Track freshness accuracy for current events, weather, markets, and scores.
-- Track latency and provider cost per retrieval mode.
-- Add regression tests for known failures.
-- Keep evaluation fixtures independent from private runtime cache state.
+- [x] Create a golden query set with expected sources or facts.
+- [x] Track recall@k for known-answer retrieval.
+- [x] Track citation/source accuracy through expected source URLs.
+- [x] Track freshness-sensitive query behavior in the starter fixture.
+- [x] Track latency for the isolated local evaluation command.
+- [ ] Track provider cost per retrieval mode.
+- [ ] Add broader regression tests for known failures.
+- [x] Keep evaluation fixtures independent from private runtime cache state.
 
 Acceptance criteria:
 
-- A single command runs the retrieval evaluation suite.
-- Evaluation output is comparable across commits.
-- Ranking changes are not accepted without checking quality deltas.
+- [x] A single command runs the retrieval evaluation suite: `npm run eval:retrieval`.
+- [x] Evaluation output is comparable across commits.
+- [ ] Ranking changes are not accepted without checking quality deltas in CI.
 
 ## 6. Operational Hardening
 
-Status: not started
+Status: partial baseline implemented
 
 Goal: make the service easier to run, debug, and recover locally.
 
 Work:
 
-- Add database migrations and migration docs.
-- Add backup and restore procedure for the PostgreSQL store.
-- Add structured logging for retrieval runs, provider calls, cache writes, and model-host calls.
-- Add provider cost tracking for Exa search/extract usage.
-- Add caller timeout handling and request budget propagation.
-- Add request-size protections and service-level limits where needed.
-- Add OpenAPI-generated DTO parity or schema validation when contracts stabilize.
-- Add PM2 runbook notes for RAG, Utility LLM Host, and dependencies.
+- [x] Add database migrations and migration docs.
+- [x] Add backup and restore procedure for the PostgreSQL store.
+- [x] Add PostgreSQL status script for migrations, document/chunk counts, embedding jobs, and retrieval runs.
+- [x] Add PM2 runbook notes for RAG, Utility LLM Host, and dependencies.
+- [ ] Add structured logging for retrieval runs, provider calls, cache writes, and model-host calls.
+- [ ] Add provider cost tracking for Exa search/extract usage.
+- [ ] Add caller timeout handling and request budget propagation.
+- [ ] Add request-size protections and service-level limits where needed.
+- [ ] Add OpenAPI-generated DTO parity or schema validation when contracts stabilize.
 
 Acceptance criteria:
 
-- Operators can tell whether failures come from Exa, PostgreSQL, Utility LLM Host, or request validation.
-- Runtime state can be backed up and restored.
-- Contract drift is caught by tests or generated validation.
+- [x] Operators can tell whether failures come from Exa, PostgreSQL, Utility LLM Host, or request validation.
+- [x] Runtime state can be backed up and restored.
+- [ ] Contract drift is caught by tests or generated validation.

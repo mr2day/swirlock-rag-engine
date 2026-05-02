@@ -1,0 +1,52 @@
+{
+  "minimumRecallAtK": 1,
+  "documents": [
+    {
+      "title": "Hybrid Retrieval Evaluation Guide",
+      "url": "https://example.edu/rag/hybrid-retrieval-evaluation",
+      "publishedAt": "2026-04-25T00:00:00.000Z",
+      "content": "Hybrid RAG retrieval quality is evaluated with recall at k, source citation accuracy, groundedness, freshness accuracy, and latency regression checks. Lexical retrieval and vector retrieval should be blended with source quality and diversity.",
+      "excerpt": "Hybrid RAG evaluation uses recall at k, citation accuracy, freshness accuracy, and latency.",
+      "intent": "rag-evaluation",
+      "queries": ["hybrid rag evaluation recall citation freshness"]
+    },
+    {
+      "title": "PostgreSQL Full Text Search Manual",
+      "url": "https://docs.example.gov/postgresql/full-text-search",
+      "publishedAt": "2025-12-10T00:00:00.000Z",
+      "content": "PostgreSQL full text search stores lexemes in tsvector columns and matches web search style user queries through tsquery. GIN indexes support efficient local lexical retrieval.",
+      "excerpt": "PostgreSQL full text search uses tsvector, tsquery, and GIN indexes.",
+      "intent": "database-indexing",
+      "queries": ["postgresql tsvector gin lexical retrieval"]
+    },
+    {
+      "title": "Volatile Market Quote Feed",
+      "url": "https://market.example.com/quote",
+      "publishedAt": "2026-05-02T10:00:00.000Z",
+      "content": "Market quote pages are volatile sources. Refresh policies for stock, finance, weather, and sports sources should use shorter refresh windows than stable documentation.",
+      "excerpt": "Market quotes are volatile and need short refresh windows.",
+      "intent": "freshness-policy",
+      "queries": ["market quote refresh window volatile source"]
+    }
+  ],
+  "queries": [
+    {
+      "query": "how should hybrid rag retrieval quality be evaluated",
+      "freshness": "low",
+      "expectedUrl": "https://example.edu/rag/hybrid-retrieval-evaluation",
+      "k": 3
+    },
+    {
+      "query": "postgresql tsvector gin local lexical retrieval",
+      "freshness": "low",
+      "expectedUrl": "https://docs.example.gov/postgresql/full-text-search",
+      "k": 3
+    },
+    {
+      "query": "volatile market quote sources refresh policy",
+      "freshness": "high",
+      "expectedUrl": "https://market.example.com/quote",
+      "k": 3
+    }
+  ]
+}

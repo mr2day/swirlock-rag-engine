@@ -208,6 +208,17 @@ The service also exposes:
 
 - `GET /v2/health`
 
+Useful local maintenance commands:
+
+```powershell
+npm run knowledge:import-json
+npm run eval:retrieval
+powershell -ExecutionPolicy Bypass -File scripts\rag-postgres-status.ps1
+powershell -ExecutionPolicy Bypass -File scripts\backup-rag-postgres.ps1
+```
+
+See `docs/RAG_OPERATIONS.md` for migration, backup, restore, PM2, and failure-triage notes.
+
 For local process management:
 
 ```powershell
@@ -243,9 +254,10 @@ It currently contains:
 - Exa live search and extract diagnostics
 - a `v2` contract-facing retrieval endpoint
 - a Utility LLM Host WebSocket client for query support, image observations, extraction summaries, and evidence shaping
-- a PostgreSQL-backed local web-derived knowledge store with full-text indexes and `pgvector` columns for future embeddings
+- a PostgreSQL-backed local web-derived knowledge store with canonical URLs, chunking, full-text indexes, refresh metadata, embedding-job placeholders, and `pgvector` fields for future embeddings
 - deterministic retrieval-mode routing
 - evidence packaging and lightweight retrieval synthesis
+- a baseline golden-query retrieval evaluation command
 - unit coverage for query resolution, ranking, cache persistence, retrieval policy, and contract retrieval behavior
 
 The remaining larger pieces are shared media resolution for `imageId`, embedding generation, vector retrieval/reranking, and broader e2e contract coverage.
