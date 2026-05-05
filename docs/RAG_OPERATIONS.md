@@ -22,6 +22,19 @@ powershell -ExecutionPolicy Bypass -File scripts\rag-postgres-status.ps1
 
 Expected local extensions are `citext`, `pg_trgm`, `plpgsql`, `unaccent`, and `vector`.
 
+## Streaming Retrieval
+
+The streaming retrieval endpoint is:
+
+```text
+POST /v2/retrieval/evidence/stream
+```
+
+It accepts the same request body as `POST /v2/retrieval/evidence`, but responds with
+`text/event-stream`. Use it from the Chat Orchestrator when the UI needs live "searching" progress
+and discovered-source updates. The stream ends with `retrieval.completed` on success or
+`retrieval.failed` on failure.
+
 ## Migrations
 
 The RAG Engine owns its internal schema migrations. Migrations run from the application process when

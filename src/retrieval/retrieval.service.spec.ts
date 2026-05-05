@@ -190,6 +190,59 @@ describe('RetrievalService', () => {
     expect(result.retrievalDiagnostics.localSearchPerformed).toBe(true);
   });
 
+  it('emits ordered retrieval progress events for streaming callers', async () => {
+    const { service, knowledgeSearch } = makeHarness();
+    const events: string[] = [];
+
+    knowledgeSearch.mockResolvedValue([
+      {
+        document: {
+          evidenceId: '0196f9e8-71b6-7dc0-8d2c-b0b3c4567890',
+          sourceTitle: 'RAG evaluation guide',
+          sourceUrl: 'https://example.com/rag-eval',
+          excerpt:
+            'RAG evaluation uses groundedness, faithfulness, and recall.',
+          content:
+            'RAG evaluation uses groundedness, faithfulness, and recall.',
+          providerSummary: null,
+          intent: 'general',
+          searchQueries: ['latest RAG evaluation methods'],
+          publishedAt: '2026-04-20T00:00:00.000Z',
+          firstRetrievedAt: '2026-04-21T00:00:00.000Z',
+          lastRetrievedAt: '2026-04-21T00:00:00.000Z',
+          lastSeenAt: '2026-04-21T00:00:00.000Z',
+          timesSeen: 1,
+          contentHash: 'hash',
+        },
+        relevanceScore: 0.82,
+        freshnessScore: 0.7,
+        score: 42,
+      },
+    ]);
+
+    await service.retrieveEvidence(
+      makeRequest({ allowedModes: ['local_rag'] }),
+      'turn-1',
+      (event) => {
+        events.push(`${event.sequence}:${event.type}`);
+      },
+    );
+
+    expect(events).toEqual([
+      '1:retrieval.started',
+      '2:utility_llm.retrieval_support.started',
+      '3:utility_llm.retrieval_support.completed',
+      '4:query.normalized',
+      '5:local.search.started',
+      '6:local.search.completed',
+      '7:retrieval.policy.decided',
+      '8:evidence.chunk',
+      '9:utility_llm.evidence_synthesis.started',
+      '10:utility_llm.evidence_synthesis.completed',
+      '11:retrieval.completed',
+    ]);
+  });
+
   it('uses query embeddings for local hybrid retrieval when embedding service is enabled', async () => {
     const {
       service,
@@ -332,6 +385,7 @@ describe('RetrievalService', () => {
       'latest RAG evaluation methods',
       5,
       3,
+      expect.any(Function),
     );
     expect(upsertExtractedDocuments).toHaveBeenCalledWith(
       [document],
@@ -414,6 +468,7 @@ describe('RetrievalService', () => {
       'RAG evaluation benchmark groundedness recall 2026',
       5,
       3,
+      expect.any(Function),
     );
     expect(result.normalizedQuery.intent).toBe('rag-evaluation');
     expect(result.retrievalDiagnostics.utilityLlm?.usedForQuery).toBe(true);

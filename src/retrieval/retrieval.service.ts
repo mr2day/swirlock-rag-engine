@@ -3,7 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { createUuidV7 } from '../common/ids';
 import { serviceRuntimeConfig } from '../config/service-config';
 import { SearchService } from '../search/search.service';
-import type { ExtractedDocument } from '../search/search.types';
+import type {
+  ExtractedDocument,
+  NormalizedSearchResult,
+} from '../search/search.types';
 import {
   resolveSearchQuery,
   type SearchQueryResolution,
@@ -25,6 +28,8 @@ import type {
   RetrieveEvidenceData,
   RetrievalFreshness,
   RetrievalMode,
+  RetrievalStreamEmitter,
+  RetrievalStreamEventType,
   ValidatedRetrieveEvidenceRequest,
 } from './retrieval.types';
 import type { EmbeddingCallDiagnostics } from './embedding-service.types';
@@ -57,6 +62,11 @@ interface EmbeddingRetrievalState {
   calls: EmbeddingCallDiagnostics[];
 }
 
+type RetrievalProgressPublisher = (
+  type: RetrievalStreamEventType,
+  data?: Record<string, unknown>,
+) => Promise<void>;
+
 @Injectable()
 export class RetrievalService {
   private readonly logger = new Logger(RetrievalService.name);
@@ -73,9 +83,24 @@ export class RetrievalService {
   async retrieveEvidence(
     rawRequest: unknown,
     correlationId: string | undefined,
+    streamEmitter?: RetrievalStreamEmitter,
   ): Promise<RetrieveEvidenceData> {
     assertCorrelationId(correlationId);
 
+    let streamSequence = 0;
+    const publish: RetrievalProgressPublisher = async (type, data = {}) => {
+      if (!streamEmitter) {
+        return;
+      }
+
+      streamSequence += 1;
+      await streamEmitter({
+        type,
+        sequence: streamSequence,
+        occurredAt: new Date().toISOString(),
+        data,
+      });
+    };
     const startedAt = Date.now();
     const request = validateRetrieveEvidenceRequest(
       rawRequest,
@@ -84,6 +109,14 @@ export class RetrievalService {
         serviceRuntimeConfig.maxEvidenceChunks,
       ),
     );
+    await publish('retrieval.started', {
+      freshness: request.query.freshness,
+      allowedModes: request.query.allowedModes,
+      maxEvidenceChunks: request.query.maxEvidenceChunks,
+      synthesisMode: request.query.synthesisMode,
+      partTypes: request.query.parts.map((part) => part.type),
+    });
+
     const initialQueryText = this.buildQueryText(request);
     const imageParts = this.getImageParts(request);
     const utilityConfig = this.utilityLlmService.getConfiguration();
@@ -105,6 +138,10 @@ export class RetrievalService {
       usedForQuery: false,
       calls: [],
     };
+    await publish('utility_llm.retrieval_support.started', {
+      enabled: utilityState.enabled,
+      configuredUrl: utilityState.configuredUrl,
+    });
     const utilitySupport = await this.utilityLlmService.prepareRetrievalSupport(
       {
         correlationId,
@@ -120,6 +157,14 @@ export class RetrievalService {
     utilityState.usedForQuery = utilitySupport.usedForQuery;
     utilityState.usedForImages = utilitySupport.usedForImages;
     utilityState.calls.push(...utilitySupport.diagnostics);
+    await publish('utility_llm.retrieval_support.completed', {
+      usedForQuery: utilitySupport.usedForQuery,
+      usedForImages: utilitySupport.usedForImages,
+      searchQueries: utilitySupport.searchQueries,
+      imageObservationCount: utilitySupport.imageObservations.length,
+      warningCount: utilitySupport.warnings.length,
+      diagnostics: utilitySupport.diagnostics,
+    });
 
     const queryText = (
       utilitySupport.queryText ||
@@ -145,8 +190,19 @@ export class RetrievalService {
       hasSearchableText && request.query.allowedModes.includes('local_rag');
     const caveats: string[] = [];
     let queryEmbedding: number[] | null = null;
+    await publish('query.normalized', {
+      queryText: effectiveQuery,
+      intent,
+      modality,
+      imageObservationCount: imageObservations.length,
+      hasSearchableText,
+    });
 
     if (shouldProbeLocal && embeddingState.enabled) {
+      await publish('embedding.query.started', {
+        modelId: embeddingState.modelId,
+        dimensions: embeddingState.dimensions,
+      });
       const { result, diagnostics } = await this.embeddingService.embed(
         correlationId,
         [effectiveQuery],
@@ -163,8 +219,25 @@ export class RetrievalService {
           `Embedding query generation failed; local retrieval used lexical search only: ${diagnostics.error}`,
         );
       }
+      await publish('embedding.query.completed', {
+        succeeded: diagnostics.succeeded,
+        attempted: diagnostics.attempted,
+        attempts: diagnostics.attempts,
+        durationMs: diagnostics.durationMs,
+        dimensions: result.dimensions,
+        vectorCount: result.embeddings.length,
+        usedForQuery: embeddingState.usedForQuery,
+        ...(diagnostics.error ? { error: diagnostics.error } : {}),
+      });
     }
 
+    if (shouldProbeLocal) {
+      await publish('local.search.started', {
+        queryText: effectiveQuery,
+        mode: queryEmbedding ? 'hybrid' : 'lexical',
+        maxResults: request.query.maxEvidenceChunks * 2,
+      });
+    }
     const localResults = shouldProbeLocal
       ? queryEmbedding
         ? await this.knowledgeStore.searchHybrid(
@@ -179,12 +252,28 @@ export class RetrievalService {
             request.query.maxEvidenceChunks * 2,
           )
       : [];
+    if (shouldProbeLocal) {
+      await publish('local.search.completed', {
+        resultCount: localResults.length,
+        mode: queryEmbedding ? 'hybrid' : 'lexical',
+        sources: localResults.map((result) =>
+          this.mapLocalResultToStreamSource(result),
+        ),
+      });
+    }
     const policyDecision = this.retrievalPolicy.decide({
       allowedModes: request.query.allowedModes,
       freshness: request.query.freshness,
       localResultCount: localResults.length,
       hasSearchableText,
       hasImageInput: imageParts.length > 0,
+    });
+    await publish('retrieval.policy.decided', {
+      mode: policyDecision.mode,
+      reason: policyDecision.reason,
+      useLocal: policyDecision.useLocal,
+      useLive: policyDecision.useLive,
+      localResultCount: localResults.length,
     });
     const localChunks = policyDecision.useLocal
       ? localResults.map((result) => this.mapLocalResultToEvidence(result))
@@ -196,6 +285,7 @@ export class RetrievalService {
           request,
           queryResolution,
           correlationId,
+          publish,
         )
       : {
           chunks: [],
@@ -231,6 +321,11 @@ export class RetrievalService {
       ),
       request.query.maxEvidenceChunks,
     );
+    for (const chunk of evidenceChunks) {
+      await publish('evidence.chunk', {
+        chunk: this.mapEvidenceChunkToStreamSource(chunk),
+      });
+    }
     const normalizedQuery: NormalizedQuery = {
       modality,
       intent,
@@ -240,6 +335,12 @@ export class RetrievalService {
       freshness: request.query.freshness,
       reason: policyDecision.reason,
     };
+    if (request.query.synthesisMode !== 'none') {
+      await publish('utility_llm.evidence_synthesis.started', {
+        synthesisMode: request.query.synthesisMode,
+        evidenceChunkCount: evidenceChunks.length,
+      });
+    }
     const utilitySynthesis =
       request.query.synthesisMode !== 'none'
         ? await this.utilityLlmService.shapeEvidenceSynthesis({
@@ -258,6 +359,13 @@ export class RetrievalService {
     utilityState.usedForEvidenceSynthesis = Boolean(utilitySynthesis.synthesis);
     utilityState.calls.push(...utilitySynthesis.diagnostics);
     caveats.push(...utilitySynthesis.warnings);
+    if (request.query.synthesisMode !== 'none') {
+      await publish('utility_llm.evidence_synthesis.completed', {
+        succeeded: Boolean(utilitySynthesis.synthesis),
+        warningCount: utilitySynthesis.warnings.length,
+        diagnostics: utilitySynthesis.diagnostics,
+      });
+    }
 
     const synthesis =
       utilitySynthesis.synthesis ??
@@ -319,6 +427,12 @@ export class RetrievalService {
       `[retrieval] ${policyDecision.mode} produced ${evidenceChunks.length} evidence chunk(s) for correlation ${correlationId}.`,
     );
 
+    await publish('retrieval.completed', {
+      retrieval: data,
+      durationMs: retrievalDiagnostics.durationMs,
+      evidenceChunkCount: evidenceChunks.length,
+    });
+
     return data;
   }
 
@@ -328,6 +442,7 @@ export class RetrievalService {
     request: ValidatedRetrieveEvidenceRequest,
     queryResolution: SearchQueryResolution | null,
     correlationId: string,
+    publish: RetrievalProgressPublisher,
   ): Promise<LiveRetrievalResult> {
     const retrievedAt = new Date().toISOString();
     const searchLimit = this.getConfiguredInteger(
@@ -345,6 +460,41 @@ export class RetrievalService {
       effectiveQuery,
       searchLimit,
       extractLimit,
+      async (event) => {
+        if (event.type === 'search_started') {
+          await publish('live.search.started', {
+            queryText: event.query,
+            searchLimit: event.searchLimit,
+          });
+        } else if (event.type === 'search_completed') {
+          await publish('live.search.completed', {
+            queryText: event.query,
+            latencyMs: event.search.latencyMs,
+            resultCount: event.search.resultCount,
+            requestId: event.search.requestId,
+            sources: event.search.topResults.map((result) =>
+              this.mapSearchResultToStreamSource(result),
+            ),
+          });
+        } else if (event.type === 'extract_started') {
+          await publish('live.extract.started', {
+            queryText: event.query,
+            urls: event.urls,
+            extractLimit: event.extractLimit,
+          });
+        } else if (event.type === 'extract_completed') {
+          await publish('live.extract.completed', {
+            queryText: event.query,
+            latencyMs: event.extract.latencyMs,
+            documentCount: event.extract.documentCount,
+            totalCharacters: event.extract.totalCharacters,
+            failedSources: event.extract.failedSources,
+            sources: event.extract.documents.map((document) =>
+              this.mapExtractedDocumentToStreamSource(document),
+            ),
+          });
+        }
+      },
     );
 
     if (inspection.status !== 'ok') {
@@ -362,6 +512,9 @@ export class RetrievalService {
     const documents = inspection.extract?.documents ?? [];
     const warnings: string[] = [];
     const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
+    await publish('utility_llm.extraction_summaries.started', {
+      documentCount: documents.length,
+    });
     const extractionSummaries =
       await this.utilityLlmService.summarizeExtractedDocuments({
         correlationId,
@@ -378,6 +531,11 @@ export class RetrievalService {
 
     warnings.push(...extractionSummaries.warnings);
     utilityDiagnostics.push(...extractionSummaries.diagnostics);
+    await publish('utility_llm.extraction_summaries.completed', {
+      summaryCount: extractionSummaries.summariesByUrl.size,
+      warningCount: extractionSummaries.warnings.length,
+      diagnostics: extractionSummaries.diagnostics,
+    });
 
     try {
       await this.knowledgeStore.upsertExtractedDocuments(
@@ -450,6 +608,78 @@ export class RetrievalService {
       retrievedAt: this.normalizeRequiredTimestamp(
         result.document.lastRetrievedAt,
       ),
+    };
+  }
+
+  private mapLocalResultToStreamSource(result: {
+    document: {
+      evidenceId: string;
+      sourceTitle: string;
+      sourceUrl: string | null;
+      publishedAt: string | null;
+      lastRetrievedAt: string;
+    };
+    relevanceScore: number;
+    freshnessScore: number;
+    score: number;
+  }): Record<string, unknown> {
+    return {
+      sourceType: 'local_cache',
+      evidenceId: result.document.evidenceId,
+      title: result.document.sourceTitle,
+      ...(result.document.sourceUrl ? { url: result.document.sourceUrl } : {}),
+      relevanceScore: result.relevanceScore,
+      freshnessScore: result.freshnessScore,
+      score: result.score,
+      ...(result.document.publishedAt
+        ? { publishedAt: result.document.publishedAt }
+        : {}),
+      retrievedAt: result.document.lastRetrievedAt,
+    };
+  }
+
+  private mapSearchResultToStreamSource(
+    result: NormalizedSearchResult,
+  ): Record<string, unknown> {
+    return {
+      sourceType: 'web',
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+      ...(result.score !== null ? { score: result.score } : {}),
+      ...(result.publishedAt ? { publishedAt: result.publishedAt } : {}),
+    };
+  }
+
+  private mapExtractedDocumentToStreamSource(
+    document: ExtractedDocument,
+  ): Record<string, unknown> {
+    return {
+      sourceType: 'web',
+      title: document.title,
+      url: document.url,
+      excerpt: this.limitEvidenceContent(document.excerpt, 500),
+      contentLength: document.contentLength,
+      ...(document.score !== null ? { score: document.score } : {}),
+      ...(document.publishedAt ? { publishedAt: document.publishedAt } : {}),
+    };
+  }
+
+  private mapEvidenceChunkToStreamSource(
+    chunk: EvidenceChunk,
+  ): Record<string, unknown> {
+    return {
+      evidenceId: chunk.evidenceId,
+      sourceType: chunk.sourceType,
+      title: chunk.sourceTitle,
+      ...(chunk.sourceUrl ? { url: chunk.sourceUrl } : {}),
+      content: this.limitEvidenceContent(chunk.content, 700),
+      relevanceScore: chunk.relevanceScore,
+      ...(chunk.freshnessScore !== undefined
+        ? { freshnessScore: chunk.freshnessScore }
+        : {}),
+      ...(chunk.publishedAt ? { publishedAt: chunk.publishedAt } : {}),
+      retrievedAt: chunk.retrievedAt,
     };
   }
 

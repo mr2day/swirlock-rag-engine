@@ -194,6 +194,7 @@ Service contract on `127.0.0.1:3002`.
 The phase-one contract endpoint is:
 
 - `POST /v2/retrieval/evidence`
+- `POST /v2/retrieval/evidence/stream`
 
 All contract calls require:
 
@@ -218,6 +219,35 @@ The endpoint returns the common contract envelope:
   }
 }
 ```
+
+The streaming endpoint uses the same request body and returns
+`text/event-stream`. Each SSE message uses the event type as the SSE `event`
+name and a JSON `RetrievalStreamEvent` as `data`. The final successful event is
+`retrieval.completed`; its payload contains the same retrieval data returned by
+`POST /v2/retrieval/evidence`.
+
+Streaming events are intended for orchestrator/UI progress:
+
+- `retrieval.started`
+- `utility_llm.retrieval_support.started`
+- `utility_llm.retrieval_support.completed`
+- `query.normalized`
+- `embedding.query.started`
+- `embedding.query.completed`
+- `local.search.started`
+- `local.search.completed`
+- `retrieval.policy.decided`
+- `live.search.started`
+- `live.search.completed`
+- `live.extract.started`
+- `live.extract.completed`
+- `utility_llm.extraction_summaries.started`
+- `utility_llm.extraction_summaries.completed`
+- `evidence.chunk`
+- `utility_llm.evidence_synthesis.started`
+- `utility_llm.evidence_synthesis.completed`
+- `retrieval.completed`
+- `retrieval.failed`
 
 The service also exposes:
 
@@ -277,5 +307,6 @@ It currently contains:
 - evidence packaging and lightweight retrieval synthesis
 - a baseline golden-query retrieval evaluation command
 - unit coverage for query resolution, ranking, cache persistence, retrieval policy, and contract retrieval behavior
+- a streaming retrieval endpoint for orchestrator-visible search progress
 
-The remaining larger pieces are shared media resolution for `imageId`, stronger reranking, provider-cost tracking, contract-generated validation, broader e2e contract coverage, and a larger retrieval evaluation corpus.
+The remaining larger pieces are shared media resolution for `imageId`, stronger reranking, provider-cost tracking, contract-generated validation, broader orchestrator integration, and a larger retrieval evaluation corpus.

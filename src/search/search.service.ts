@@ -22,6 +22,7 @@ import type {
   SearchExecutionResult,
   SearchExtractExecutionResult,
   SearchExtractInspectionResult,
+  SearchExtractProgressHandler,
   SearchStageResult,
   StructuredSummary,
   WeatherSnapshot,
@@ -162,6 +163,7 @@ export class SearchService {
     query: string,
     searchLimit = 5,
     extractLimit = 3,
+    progress?: SearchExtractProgressHandler,
   ): Promise<SearchExtractInspectionResult> {
     const normalizedQuery = this.normalizeQuery(query);
     const queryResolution = resolveSearchQuery(normalizedQuery);
@@ -176,6 +178,7 @@ export class SearchService {
       searchLimit,
       extractLimit,
       startedAt,
+      progress,
     );
 
     this.logger.log(
@@ -199,6 +202,7 @@ export class SearchService {
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
+    progress?: SearchExtractProgressHandler,
   ): Promise<SearchExtractExecutionResult> {
     try {
       return await this.searchThenExtractWithExa(
@@ -206,6 +210,7 @@ export class SearchService {
         searchLimit,
         extractLimit,
         startedAt,
+        progress,
       );
     } catch (error) {
       const message = this.getErrorMessage(error);
@@ -227,11 +232,17 @@ export class SearchService {
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
+    progress?: SearchExtractProgressHandler,
   ): Promise<SearchExtractExecutionResult> {
     const searchStartedAt = Date.now();
     const query = queryResolution.effectiveQuery;
 
     this.logger.log(`[extract:exa] Search stage started.`);
+    await progress?.({
+      type: 'search_started',
+      query,
+      searchLimit,
+    });
 
     const searchRaw = await this.searchWithExaDiscovery(
       query,
@@ -261,12 +272,23 @@ export class SearchService {
     this.logger.log(
       `[extract:exa] Search stage completed in ${searchLatencyMs}ms with ${topResults.length} result(s).`,
     );
+    await progress?.({
+      type: 'search_completed',
+      query,
+      search: searchStage,
+    });
 
     const extractStartedAt = Date.now();
 
     this.logger.log(
       `[extract:exa] Extract stage started for ${urlsToExtract.length} URL(s).`,
     );
+    await progress?.({
+      type: 'extract_started',
+      query,
+      urls: urlsToExtract,
+      extractLimit,
+    });
 
     const extractRaw =
       urlsToExtract.length > 0
@@ -322,6 +344,11 @@ export class SearchService {
     this.logger.log(
       `[extract:exa] Extract stage completed in ${extractLatencyMs}ms with ${documents.length} document(s).`,
     );
+    await progress?.({
+      type: 'extract_completed',
+      query,
+      extract: extractStage,
+    });
 
     return {
       status: 'ok',

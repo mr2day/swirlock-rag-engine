@@ -12,6 +12,7 @@ to a high-quality retrieval system.
 - Local HTTP binding: `127.0.0.1:3001`
 - Utility LLM Host: called over the v2 WebSocket inference stream for retrieval support
 - Embedding Service: called over HTTP on `127.0.0.1:3002`; backed locally by CPU-only `llama-server-embedding` on `127.0.0.1:8081`
+- Streaming retrieval: `POST /v2/retrieval/evidence/stream` emits Server-Sent Events for orchestrator progress
 
 ## 1. Utility LLM Host Client
 
@@ -162,6 +163,8 @@ Work:
 - [x] Add PM2 runbook notes for RAG, Utility LLM Host, and dependencies.
 - [x] Add health diagnostics for Embedding Service readiness and embedding-job counts.
 - [x] Add degraded-mode behavior when query embedding fails; lexical local retrieval still runs.
+- [x] Add Server-Sent Events streaming for retrieval progress and source discovery.
+- [x] Document the streaming contract in contracts v3 for the Chat Orchestrator agent.
 - [ ] Add structured logging for retrieval runs, provider calls, cache writes, and model-host calls.
 - [ ] Add provider cost tracking for Exa search/extract usage.
 - [ ] Add caller timeout handling and request budget propagation.

@@ -101,3 +101,30 @@ export interface SearchExtractInspectionResult {
   search: SearchStageResult | null;
   extract: ExtractStageResult | null;
 }
+
+export type SearchExtractProgressEvent =
+  | {
+      type: 'search_started';
+      query: string;
+      searchLimit: number;
+    }
+  | {
+      type: 'search_completed';
+      query: string;
+      search: SearchStageResult;
+    }
+  | {
+      type: 'extract_started';
+      query: string;
+      urls: string[];
+      extractLimit: number;
+    }
+  | {
+      type: 'extract_completed';
+      query: string;
+      extract: ExtractStageResult;
+    };
+
+export type SearchExtractProgressHandler = (
+  event: SearchExtractProgressEvent,
+) => void | Promise<void>;

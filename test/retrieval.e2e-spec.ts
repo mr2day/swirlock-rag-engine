@@ -121,6 +121,52 @@ describe('RetrievalController (e2e)', () => {
     expect(Array.isArray(body.data.evidenceChunks)).toBe(true);
   });
 
+  it('/v2/retrieval/evidence/stream (POST)', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/v2/retrieval/evidence/stream')
+      .set('x-correlation-id', 'e2e-retrieval-stream')
+      .send({
+        requestContext: {
+          callerService: 'e2e-test',
+          priority: 'interactive',
+          requestedAt: '2026-05-01T12:00:00Z',
+        },
+        query: {
+          parts: [{ type: 'text', text: 'phase one local retrieval smoke' }],
+          freshness: 'low',
+          allowedModes: ['local_rag'],
+          maxEvidenceChunks: 2,
+          synthesisMode: 'brief',
+        },
+      })
+      .expect(200)
+      .expect('Content-Type', /text\/event-stream/);
+    const events = parseSseEvents(response.text);
+
+    expect(events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        'retrieval.started',
+        'local.search.started',
+        'local.search.completed',
+        'retrieval.completed',
+      ]),
+    );
+    expect(events.at(-1)?.type).toBe('retrieval.completed');
+  });
+
+  function parseSseEvents(text: string): Array<{ type: string }> {
+    return text
+      .split(/\n\n/)
+      .map((block) =>
+        block
+          .split(/\n/)
+          .find((line) => line.startsWith('data: '))
+          ?.slice('data: '.length),
+      )
+      .filter((line): line is string => Boolean(line))
+      .map((line) => JSON.parse(line) as { type: string });
+  }
+
   it('returns a contract error envelope when correlation id is missing', async () => {
     const response = await request(app.getHttpServer())
       .post('/v2/retrieval/evidence')

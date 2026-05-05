@@ -145,6 +145,39 @@ export interface RetrieveEvidenceData {
 
 export type RetrieveEvidenceResponse = ApiEnvelope<RetrieveEvidenceData>;
 
+export type RetrievalStreamEventType =
+  | 'retrieval.started'
+  | 'utility_llm.retrieval_support.started'
+  | 'utility_llm.retrieval_support.completed'
+  | 'query.normalized'
+  | 'embedding.query.started'
+  | 'embedding.query.completed'
+  | 'local.search.started'
+  | 'local.search.completed'
+  | 'retrieval.policy.decided'
+  | 'live.search.started'
+  | 'live.search.completed'
+  | 'live.extract.started'
+  | 'live.extract.completed'
+  | 'utility_llm.extraction_summaries.started'
+  | 'utility_llm.extraction_summaries.completed'
+  | 'evidence.chunk'
+  | 'utility_llm.evidence_synthesis.started'
+  | 'utility_llm.evidence_synthesis.completed'
+  | 'retrieval.completed'
+  | 'retrieval.failed';
+
+export interface RetrievalStreamEvent {
+  type: RetrievalStreamEventType;
+  sequence: number;
+  occurredAt: string;
+  data: Record<string, unknown>;
+}
+
+export type RetrievalStreamEmitter = (
+  event: RetrievalStreamEvent,
+) => void | Promise<void>;
+
 export interface ValidatedRetrieveEvidenceRequest extends RetrieveEvidenceRequest {
   query: RetrieveEvidenceRequest['query'] & {
     maxEvidenceChunks: number;
