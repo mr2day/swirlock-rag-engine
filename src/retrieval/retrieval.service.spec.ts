@@ -1,6 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import type { SearchService } from '../search/search.service';
 import type { ExtractedDocument } from '../search/search.types';
+import type { EmbeddingServiceService } from './embedding-service.service';
 import type { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
 import { RetrievalService } from './retrieval.service';
@@ -42,18 +43,44 @@ describe('RetrievalService', () => {
     } as unknown as ConfigService;
     const searchThenExtract = jest.fn();
     const knowledgeSearch = jest.fn();
+    const knowledgeSearchHybrid = jest.fn();
     const upsertExtractedDocuments = jest.fn();
     const recordRetrievalRun = jest.fn().mockResolvedValue(undefined);
     const count = jest.fn();
-    const getStatus = jest.fn().mockResolvedValue({
+    const utilityGetStatus = jest.fn().mockResolvedValue({
       enabled: false,
-      configuredUrl: 'http://127.0.0.1:3000',
+      configuredUrl: 'http://127.0.0.1:3213',
       ready: false,
       durationMs: 0,
     });
-    const getConfiguration = jest.fn().mockReturnValue({
+    const utilityGetConfiguration = jest.fn().mockReturnValue({
       enabled: false,
-      configuredUrl: 'http://127.0.0.1:3000',
+      configuredUrl: 'http://127.0.0.1:3213',
+    });
+    const embeddingGetConfiguration = jest.fn().mockReturnValue({
+      enabled: false,
+      url: 'http://127.0.0.1:3002',
+      modelId: 'bge-small-en-v1.5',
+      dimensions: 384,
+    });
+    const embeddingEmbed = jest.fn().mockResolvedValue({
+      result: {
+        modelId: 'bge-small-en-v1.5',
+        dimensions: 384,
+        normalized: true,
+        inputType: 'query',
+        embeddings: [],
+        durationMs: 0,
+      },
+      diagnostics: {
+        attempted: false,
+        succeeded: false,
+        durationMs: 0,
+        attempts: 0,
+        inputCount: 0,
+        inputType: 'query',
+        error: 'Embedding service is disabled.',
+      },
     });
     const prepareRetrievalSupport = jest.fn().mockResolvedValue({
       queryText: null,
@@ -80,36 +107,46 @@ describe('RetrievalService', () => {
     } as unknown as jest.Mocked<SearchService>;
     const knowledgeStore = {
       storePath: 'C:/tmp/knowledge-store.json',
+      storeKind: 'json_file',
       search: knowledgeSearch,
+      searchHybrid: knowledgeSearchHybrid,
       upsertExtractedDocuments,
       recordRetrievalRun,
       count,
     } as unknown as jest.Mocked<KnowledgeStoreService>;
     const utilityLlmService = {
-      getConfiguration,
-      getStatus,
+      getConfiguration: utilityGetConfiguration,
+      getStatus: utilityGetStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,
       shapeEvidenceSynthesis,
     } as unknown as jest.Mocked<UtilityLlmService>;
+    const embeddingService = {
+      getConfiguration: embeddingGetConfiguration,
+      embed: embeddingEmbed,
+    } as unknown as jest.Mocked<EmbeddingServiceService>;
     const service = new RetrievalService(
       configService,
       searchService,
       knowledgeStore,
       new RetrievalPolicyService(),
       utilityLlmService,
+      embeddingService,
     );
 
     return {
       service,
       searchThenExtract,
       knowledgeSearch,
+      knowledgeSearchHybrid,
       upsertExtractedDocuments,
       recordRetrievalRun,
-      getStatus,
+      utilityGetStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,
       shapeEvidenceSynthesis,
+      embeddingGetConfiguration,
+      embeddingEmbed,
     };
   }
 
@@ -151,6 +188,86 @@ describe('RetrievalService', () => {
     expect(result.normalizedQuery.retrievalMode).toBe('local_rag');
     expect(result.evidenceChunks[0]?.sourceType).toBe('local_cache');
     expect(result.retrievalDiagnostics.localSearchPerformed).toBe(true);
+  });
+
+  it('uses query embeddings for local hybrid retrieval when embedding service is enabled', async () => {
+    const {
+      service,
+      knowledgeSearch,
+      knowledgeSearchHybrid,
+      embeddingGetConfiguration,
+      embeddingEmbed,
+    } = makeHarness();
+
+    embeddingGetConfiguration.mockReturnValue({
+      enabled: true,
+      url: 'http://127.0.0.1:3002',
+      modelId: 'bge-small-en-v1.5',
+      dimensions: 3,
+    });
+    embeddingEmbed.mockResolvedValue({
+      result: {
+        modelId: 'bge-small-en-v1.5',
+        dimensions: 3,
+        normalized: true,
+        inputType: 'query',
+        embeddings: [[0.1, 0.2, 0.3]],
+        durationMs: 5,
+      },
+      diagnostics: {
+        attempted: true,
+        succeeded: true,
+        durationMs: 5,
+        attempts: 1,
+        inputCount: 1,
+        inputType: 'query',
+      },
+    });
+    knowledgeSearchHybrid.mockResolvedValue([
+      {
+        document: {
+          evidenceId: '0196f9e8-71b6-7dc0-8d2c-b0b3c4567891',
+          sourceTitle: 'Vector RAG guide',
+          sourceUrl: 'https://example.com/vector-rag',
+          excerpt: 'Hybrid retrieval combines lexical and vector ranking.',
+          content: 'Hybrid retrieval combines lexical and vector ranking.',
+          providerSummary: null,
+          intent: 'general',
+          searchQueries: ['latest RAG evaluation methods'],
+          publishedAt: '2026-04-20T00:00:00.000Z',
+          firstRetrievedAt: '2026-04-21T00:00:00.000Z',
+          lastRetrievedAt: '2026-04-21T00:00:00.000Z',
+          lastSeenAt: '2026-04-21T00:00:00.000Z',
+          timesSeen: 1,
+          contentHash: 'hash',
+        },
+        relevanceScore: 0.9,
+        freshnessScore: 0.7,
+        score: 0.86,
+      },
+    ]);
+
+    const result = await service.retrieveEvidence(
+      makeRequest({ allowedModes: ['local_rag'] }),
+      'turn-1',
+    );
+
+    expect(embeddingEmbed).toHaveBeenCalledWith(
+      'turn-1',
+      ['latest RAG evaluation methods'],
+      'query',
+    );
+    expect(knowledgeSearchHybrid).toHaveBeenCalledWith(
+      'latest RAG evaluation methods',
+      [0.1, 0.2, 0.3],
+      'low',
+      8,
+    );
+    expect(knowledgeSearch).not.toHaveBeenCalled();
+    expect(result.retrievalDiagnostics.embeddingService?.usedForQuery).toBe(
+      true,
+    );
+    expect(result.evidenceChunks[0]?.sourceTitle).toBe('Vector RAG guide');
   });
 
   it('runs live retrieval on cache miss and persists extracted documents', async () => {

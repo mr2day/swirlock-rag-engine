@@ -5,6 +5,8 @@ import request from 'supertest';
 import { App } from 'supertest/types';
 import type { ErrorEnvelope } from '../src/common/api-envelope';
 import { AppModule } from './../src/app.module';
+import { EmbeddingServiceService } from '../src/retrieval/embedding-service.service';
+import { EmbeddingWorkerService } from '../src/retrieval/embedding-worker.service';
 import type { RetrieveEvidenceResponse } from '../src/retrieval/retrieval.types';
 import { UtilityLlmService } from '../src/retrieval/utility-llm.service';
 
@@ -19,11 +21,11 @@ describe('RetrievalController (e2e)', () => {
       .useValue({
         getConfiguration: jest.fn().mockReturnValue({
           enabled: false,
-          configuredUrl: 'http://127.0.0.1:3000',
+          configuredUrl: 'http://127.0.0.1:3213',
         }),
         getStatus: jest.fn().mockResolvedValue({
           enabled: false,
-          configuredUrl: 'http://127.0.0.1:3000',
+          configuredUrl: 'http://127.0.0.1:3213',
           ready: false,
           durationMs: 0,
         }),
@@ -47,6 +49,44 @@ describe('RetrievalController (e2e)', () => {
           warnings: [],
           diagnostics: [],
         }),
+      })
+      .overrideProvider(EmbeddingServiceService)
+      .useValue({
+        getConfiguration: jest.fn().mockReturnValue({
+          enabled: false,
+          url: 'http://127.0.0.1:3002',
+          modelId: 'bge-small-en-v1.5',
+          dimensions: 384,
+        }),
+        getStatus: jest.fn().mockResolvedValue({
+          enabled: false,
+          configuredUrl: 'http://127.0.0.1:3002',
+          ready: false,
+          durationMs: 0,
+        }),
+        embed: jest.fn().mockResolvedValue({
+          result: {
+            modelId: 'bge-small-en-v1.5',
+            dimensions: 384,
+            normalized: true,
+            inputType: 'query',
+            embeddings: [],
+            durationMs: 0,
+          },
+          diagnostics: {
+            attempted: false,
+            succeeded: false,
+            durationMs: 0,
+            attempts: 0,
+            inputCount: 0,
+            inputType: 'query',
+            error: 'Embedding service is disabled.',
+          },
+        }),
+      })
+      .overrideProvider(EmbeddingWorkerService)
+      .useValue({
+        drainOnce: jest.fn().mockResolvedValue({ processed: 0, failed: 0 }),
       })
       .compile();
 

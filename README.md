@@ -25,7 +25,7 @@ In the wider Swirlock chatbot architecture, this service works alongside:
 - Context Fragmenter
 - Primary LLM Host
 - Utility LLM Host
-- future Embedding Service
+- Embedding Service
 
 The RAG Engine owns retrieval semantics.
 It does not own memory semantics, context-window management, or final answer generation.
@@ -36,9 +36,10 @@ The RAG Engine:
 
 - accepts text, image, or multimodal retrieval input
 - can call the Utility LLM Host over the v2 WebSocket inference stream for retrieval-support tasks
+- can call the Embedding Service over HTTP for query and document vectorization
 - normalizes text retrieval queries with Utility LLM support and deterministic fallback
 - chooses a retrieval mode using deterministic phase-one policy
-- searches a local knowledge store, the live web, or both
+- searches a local knowledge store with lexical/vector hybrid retrieval, the live web, or both
 - ranks, filters, and packages evidence
 - optionally produces an evidence-oriented synthesis for downstream use
 
@@ -169,10 +170,24 @@ Utility LLM support is configured in `service.config.cjs`:
 
 ```text
 UTILITY_LLM_ENABLED=true
-UTILITY_LLM_HOST_URL=http://127.0.0.1:3000
+UTILITY_LLM_HOST_URL=http://127.0.0.1:3213
 UTILITY_LLM_TIMEOUT_MS=30000
 UTILITY_LLM_RETRIES=1
 ```
+
+Embedding support is also configured in `service.config.cjs`:
+
+```text
+EMBEDDING_SERVICE_ENABLED=true
+EMBEDDING_SERVICE_URL=http://127.0.0.1:3002
+EMBEDDING_SERVICE_MODEL_ID=bge-small-en-v1.5
+EMBEDDING_SERVICE_DIMENSIONS=384
+EMBEDDING_WORKER_ENABLED=true
+```
+
+The Embedding Service must be backed by the CPU-only `llama-server-embedding`
+PM2 process on `127.0.0.1:8081`; the RAG Engine calls only the Embedding
+Service contract on `127.0.0.1:3002`.
 
 ## Contract API
 
@@ -254,10 +269,13 @@ It currently contains:
 - Exa live search and extract diagnostics
 - a `v2` contract-facing retrieval endpoint
 - a Utility LLM Host WebSocket client for query support, image observations, extraction summaries, and evidence shaping
-- a PostgreSQL-backed local web-derived knowledge store with canonical URLs, chunking, full-text indexes, refresh metadata, embedding-job placeholders, and `pgvector` fields for future embeddings
+- an Embedding Service HTTP client for v3-contract vectorization calls
+- a background embedding worker that drains `rag_embedding_jobs` and writes `pgvector` embeddings
+- a PostgreSQL-backed local web-derived knowledge store with canonical URLs, chunking, full-text indexes, refresh metadata, embedding jobs, and `pgvector` embeddings
+- baseline hybrid local retrieval that fuses PostgreSQL full-text/trigram ranking with vector similarity, freshness, source quality, and source diversity
 - deterministic retrieval-mode routing
 - evidence packaging and lightweight retrieval synthesis
 - a baseline golden-query retrieval evaluation command
 - unit coverage for query resolution, ranking, cache persistence, retrieval policy, and contract retrieval behavior
 
-The remaining larger pieces are shared media resolution for `imageId`, embedding generation, vector retrieval/reranking, and broader e2e contract coverage.
+The remaining larger pieces are shared media resolution for `imageId`, stronger reranking, provider-cost tracking, contract-generated validation, broader e2e contract coverage, and a larger retrieval evaluation corpus.

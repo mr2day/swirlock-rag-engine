@@ -115,6 +115,22 @@ export interface RetrievalDiagnostics {
       error?: string;
     }>;
   };
+  embeddingService?: {
+    enabled: boolean;
+    configuredUrl: string;
+    modelId: string;
+    dimensions: number;
+    usedForQuery: boolean;
+    calls: Array<{
+      attempted: boolean;
+      succeeded: boolean;
+      durationMs: number;
+      attempts: number;
+      inputCount: number;
+      inputType: 'query' | 'document';
+      error?: string;
+    }>;
+  };
   knowledgeStorePath?: string;
   knowledgeStoreKind?: 'postgresql' | 'json_file';
 }

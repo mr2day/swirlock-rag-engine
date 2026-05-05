@@ -13,7 +13,10 @@ Implemented:
 - deterministic retrieval-mode policy
 - Utility LLM Host WebSocket client for retrieval support
 - PostgreSQL-backed local knowledge store with JSON fallback when no database URL is configured
-- canonical URL deduplication, deterministic chunk IDs, refresh metadata, and pending embedding jobs
+- canonical URL deduplication, deterministic chunk IDs, refresh metadata, and embedding jobs
+- Embedding Service HTTP client for query/document vectors
+- background embedding worker that writes `pgvector` chunk embeddings
+- baseline hybrid local retrieval using lexical search plus vector similarity
 - live Exa search-then-extract wiring
 - cache persistence from successful live extraction
 - evidence chunk ranking, deduplication, and lightweight synthesis
@@ -30,7 +33,7 @@ Phase one uses deterministic retrieval policy plus optional Utility LLM Host sup
 - Image URL inputs can be sent to the Utility LLM Host for retrieval-oriented observations.
 - Image ID inputs are still reference-level until RAG has a shared media resolver.
 
-The local knowledge store is PostgreSQL-backed when `RAG_DATABASE_URL` is configured. It uses PostgreSQL full-text search today, chunks extracted documents, records refresh metadata, queues pending embedding jobs, and includes nullable `pgvector` embedding fields for the future embedding pipeline. It is intentionally separate from chatbot memory.
+The local knowledge store is PostgreSQL-backed when `RAG_DATABASE_URL` is configured. It uses PostgreSQL full-text search, chunks extracted documents, records refresh metadata, queues embedding jobs, stores `pgvector` embeddings, and performs baseline lexical/vector hybrid retrieval. It is intentionally separate from chatbot memory.
 
 ## Runtime Configuration
 
@@ -41,9 +44,14 @@ Secrets may be supplied through `.env.local`, `.env`, or process environment. Fo
 ```env
 EXA_API_KEY=
 UTILITY_LLM_ENABLED=true
-UTILITY_LLM_HOST_URL=http://127.0.0.1:3000
+UTILITY_LLM_HOST_URL=http://127.0.0.1:3213
 UTILITY_LLM_TIMEOUT_MS=30000
 UTILITY_LLM_RETRIES=1
+EMBEDDING_SERVICE_ENABLED=true
+EMBEDDING_SERVICE_URL=http://127.0.0.1:3002
+EMBEDDING_SERVICE_MODEL_ID=bge-small-en-v1.5
+EMBEDDING_SERVICE_DIMENSIONS=384
+EMBEDDING_WORKER_ENABLED=true
 ```
 
 The preferred local store is PostgreSQL:
@@ -58,8 +66,8 @@ If `RAG_DATABASE_URL` is omitted, the service falls back to `data/knowledge-stor
 
 ## Next Sensible Work
 
-- Add embedding generation and vector retrieval once the Embedding Service contract exists.
-- Add a worker that consumes `rag_embedding_jobs`.
 - Expand the golden retrieval evaluation set with real known-answer cases.
+- Add deterministic and/or model-assisted reranking on top of fused local retrieval.
+- Add provider cost tracking and broader request budget propagation.
 - Add OpenAPI-generated DTO parity or schema validation if the contracts stabilize.
 - Broaden e2e coverage for `POST /v2/retrieval/evidence`.

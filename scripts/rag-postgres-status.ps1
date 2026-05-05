@@ -48,6 +48,10 @@ SELECT 'migrations=' || string_agg(version::text, ',' ORDER BY version) FROM rag
 SELECT 'documents=' || count(*) FROM rag_source_documents;
 SELECT 'chunks=' || count(*) FROM rag_document_chunks;
 SELECT 'pending_embedding_jobs=' || count(*) FROM rag_embedding_jobs WHERE status = 'pending';
+SELECT 'in_progress_embedding_jobs=' || count(*) FROM rag_embedding_jobs WHERE status = 'in_progress';
+SELECT 'done_embedding_jobs=' || count(*) FROM rag_embedding_jobs WHERE status = 'done';
 SELECT 'failed_embedding_jobs=' || count(*) FROM rag_embedding_jobs WHERE status = 'failed';
+SELECT 'embedded_chunks=' || count(*) FROM rag_document_chunks WHERE embedding IS NOT NULL;
+SELECT 'chunks_awaiting_embedding=' || count(*) FROM rag_document_chunks WHERE needs_embedding = true;
 SELECT 'retrieval_runs=' || count(*) FROM rag_retrieval_runs;
 "@

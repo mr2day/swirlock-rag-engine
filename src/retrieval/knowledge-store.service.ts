@@ -31,6 +31,7 @@ const SEARCH_CONTENT_WINDOW = 5000;
 const DATABASE_STATEMENT_TIMEOUT_MS = 15000;
 const POSTGRES_CANDIDATE_MULTIPLIER = 5;
 const POSTGRES_MIN_CANDIDATES = 25;
+const EMBEDDING_JOB_STALE_AFTER_MS = 15 * 60 * 1000;
 
 export type KnowledgeStoreKind = 'postgresql' | 'json_file';
 
@@ -73,6 +74,31 @@ export interface KnowledgeStoreRetrievalRun {
   evidenceChunkIds: string[];
   diagnostics: Record<string, unknown>;
   retrievedAt: string;
+}
+
+export interface EmbeddingJobClaim {
+  jobId: string;
+  chunkId: string;
+  attempts: number;
+  content: string;
+}
+
+export interface EmbeddingJobStats {
+  configuredModel: string;
+  configuredDimensions: number;
+  pending: number;
+  inProgress: number;
+  done: number;
+  failed: number;
+  embeddedChunks: number;
+  chunksAwaitingEmbedding: number;
+}
+
+interface EmbeddingJobClaimRow extends QueryResultRow {
+  job_id: string;
+  chunk_id: string;
+  attempts: number;
+  content: string;
 }
 
 export interface KnowledgeStoreStatus {
@@ -120,6 +146,21 @@ interface ChunkRow extends QueryResultRow {
   exact_title?: boolean | null;
   exact_excerpt?: boolean | null;
   exact_content?: boolean | null;
+  vector_similarity?: number | string | null;
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function truncate(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return value.slice(0, Math.max(0, maxLength - 3)) + '...';
 }
 
 @Injectable()
@@ -666,18 +707,441 @@ SET
       await client.query(
         `
 INSERT INTO rag_embedding_jobs (id, chunk_id, status, embedding_model)
-VALUES ($1, $2, 'pending', 'unconfigured')
+VALUES ($1, $2, 'pending', $3)
 ON CONFLICT (chunk_id, embedding_model) DO UPDATE
 SET
   status = CASE
     WHEN rag_embedding_jobs.status = 'done' THEN rag_embedding_jobs.status
     ELSE 'pending'
   END,
+  available_after = LEAST(rag_embedding_jobs.available_after, now()),
   updated_at = now()
 `,
-        [createUuidV7(), chunk.id],
+        [createUuidV7(), chunk.id, this.embeddingModelId],
       );
     }
+  }
+
+  async claimPendingEmbeddingJobs(
+    batchSize: number,
+  ): Promise<EmbeddingJobClaim[]> {
+    if (!this.getDatabaseUrl()) {
+      return [];
+    }
+
+    await this.ensureDatabase();
+
+    const client = await this.getPool().connect();
+
+    try {
+      await client.query('BEGIN');
+      const result = await client.query<EmbeddingJobClaimRow>(
+        `
+WITH claimed AS (
+  SELECT id
+  FROM rag_embedding_jobs
+  WHERE embedding_model = $2
+    AND available_after <= now()
+    AND (
+      status = 'pending'
+      OR (
+        status = 'in_progress'
+        AND updated_at < now() - ($3::int) * interval '1 millisecond'
+      )
+    )
+  ORDER BY priority DESC, available_after ASC, created_at ASC
+  LIMIT $1
+  FOR UPDATE SKIP LOCKED
+)
+UPDATE rag_embedding_jobs
+SET status = 'in_progress',
+    attempts = rag_embedding_jobs.attempts + 1,
+    updated_at = now()
+FROM claimed, rag_document_chunks c
+WHERE rag_embedding_jobs.id = claimed.id
+  AND c.id = rag_embedding_jobs.chunk_id
+RETURNING
+  rag_embedding_jobs.id::text AS job_id,
+  rag_embedding_jobs.chunk_id::text AS chunk_id,
+  rag_embedding_jobs.attempts AS attempts,
+  c.content AS content
+`,
+        [
+          Math.max(1, Math.floor(batchSize)),
+          this.embeddingModelId,
+          EMBEDDING_JOB_STALE_AFTER_MS,
+        ],
+      );
+      await client.query('COMMIT');
+
+      return result.rows.map((row) => ({
+        jobId: row.job_id,
+        chunkId: row.chunk_id,
+        attempts: row.attempts,
+        content: row.content,
+      }));
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async writeChunkEmbedding(input: {
+    jobId: string;
+    chunkId: string;
+    embedding: number[];
+    embeddingModel: string;
+  }): Promise<void> {
+    if (!this.getDatabaseUrl()) {
+      return;
+    }
+
+    await this.ensureDatabase();
+
+    const literal = this.toVectorLiteral(input.embedding);
+    const client = await this.getPool().connect();
+
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `
+UPDATE rag_document_chunks
+SET
+  embedding = $1::vector,
+  embedding_model = $2,
+  embedding_dimensions = $3,
+  embedding_updated_at = now(),
+  needs_embedding = false,
+  updated_at = now()
+WHERE id = $4
+`,
+        [literal, input.embeddingModel, input.embedding.length, input.chunkId],
+      );
+      await client.query(
+        `
+UPDATE rag_embedding_jobs
+SET
+  status = 'done',
+  error = NULL,
+  updated_at = now()
+WHERE id = $1
+`,
+        [input.jobId],
+      );
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async markEmbeddingJobFailed(input: {
+    jobId: string;
+    error: string;
+    backoffMs: number;
+    maxAttempts: number;
+  }): Promise<void> {
+    if (!this.getDatabaseUrl()) {
+      return;
+    }
+
+    await this.ensureDatabase();
+
+    await this.getPool().query(
+      `
+UPDATE rag_embedding_jobs
+SET
+  status = CASE
+    WHEN attempts >= $4 THEN 'failed'
+    ELSE 'pending'
+  END,
+  error = $2,
+  available_after = now() + ($3::int) * interval '1 millisecond',
+  updated_at = now()
+WHERE id = $1
+`,
+      [
+        input.jobId,
+        truncate(input.error, 1000),
+        Math.max(0, Math.floor(input.backoffMs)),
+        Math.max(1, Math.floor(input.maxAttempts)),
+      ],
+    );
+  }
+
+  async releaseEmbeddingJob(input: {
+    jobId: string;
+    reason: string;
+  }): Promise<void> {
+    if (!this.getDatabaseUrl()) {
+      return;
+    }
+
+    await this.ensureDatabase();
+
+    await this.getPool().query(
+      `
+UPDATE rag_embedding_jobs
+SET
+  status = 'pending',
+  error = $2,
+  available_after = now(),
+  updated_at = now()
+WHERE id = $1
+`,
+      [input.jobId, truncate(input.reason, 1000)],
+    );
+  }
+
+  async getEmbeddingJobStats(): Promise<EmbeddingJobStats> {
+    if (!this.getDatabaseUrl()) {
+      return {
+        configuredModel: this.embeddingModelId,
+        configuredDimensions: this.embeddingDimensions,
+        pending: 0,
+        inProgress: 0,
+        done: 0,
+        failed: 0,
+        embeddedChunks: 0,
+        chunksAwaitingEmbedding: 0,
+      };
+    }
+
+    await this.ensureDatabase();
+
+    const [jobsResult, chunkResult] = await Promise.all([
+      this.getPool().query<{ status: string; count: string }>(
+        `SELECT status, COUNT(*)::text AS count FROM rag_embedding_jobs GROUP BY status`,
+      ),
+      this.getPool().query<{ embedded: string; awaiting: string }>(
+        `
+SELECT
+  COUNT(*) FILTER (WHERE embedding IS NOT NULL)::text AS embedded,
+  COUNT(*) FILTER (WHERE needs_embedding = true)::text AS awaiting
+FROM rag_document_chunks
+`,
+      ),
+    ]);
+
+    const stats: EmbeddingJobStats = {
+      configuredModel: this.embeddingModelId,
+      configuredDimensions: this.embeddingDimensions,
+      pending: 0,
+      inProgress: 0,
+      done: 0,
+      failed: 0,
+      embeddedChunks: Number.parseInt(chunkResult.rows[0]?.embedded ?? '0', 10),
+      chunksAwaitingEmbedding: Number.parseInt(
+        chunkResult.rows[0]?.awaiting ?? '0',
+        10,
+      ),
+    };
+
+    for (const row of jobsResult.rows) {
+      const count = Number.parseInt(row.count ?? '0', 10);
+      if (row.status === 'pending') stats.pending = count;
+      else if (row.status === 'in_progress') stats.inProgress = count;
+      else if (row.status === 'done') stats.done = count;
+      else if (row.status === 'failed') stats.failed = count;
+    }
+
+    return stats;
+  }
+
+  async searchByEmbedding(
+    queryEmbedding: number[],
+    freshness: RetrievalFreshness,
+    maxResults: number,
+  ): Promise<KnowledgeStoreSearchResult[]> {
+    if (!this.getDatabaseUrl() || queryEmbedding.length === 0) {
+      return [];
+    }
+
+    await this.ensureDatabase();
+
+    const literal = this.toVectorLiteral(queryEmbedding);
+    const candidateLimit = Math.max(
+      POSTGRES_MIN_CANDIDATES,
+      maxResults * POSTGRES_CANDIDATE_MULTIPLIER,
+    );
+
+    const result = await this.getPool().query<ChunkRow>(
+      `
+SELECT
+  c.id::text AS evidence_id,
+  c.chunk_index,
+  c.source_title,
+  c.source_url::text AS source_url,
+  d.canonical_url::text AS canonical_url,
+  c.source_domain,
+  c.content,
+  c.excerpt,
+  c.provider_summary,
+  c.intent,
+  c.search_queries,
+  c.published_at,
+  c.first_retrieved_at,
+  c.last_retrieved_at,
+  c.last_seen_at,
+  c.times_seen,
+  c.content_hash,
+  c.source_quality_score,
+  (1 - (c.embedding <=> $1::vector)) AS vector_similarity
+FROM rag_document_chunks c
+JOIN rag_source_documents d ON d.id = c.document_id
+WHERE c.embedding IS NOT NULL
+  AND c.embedding_dimensions = $3
+ORDER BY c.embedding <=> $1::vector ASC
+LIMIT $2
+`,
+      [literal, candidateLimit, queryEmbedding.length],
+    );
+
+    const scored = result.rows.map((row) => {
+      const document = this.mapChunkRowToDocument(row);
+      const similarity = clampUnit(this.toNumber(row.vector_similarity));
+      const freshnessScore = this.scoreFreshness(document, freshness);
+      const sourceQualityScore = this.toNumber(row.source_quality_score);
+      const score = this.scoreHybridCandidate({
+        relevanceScore: similarity,
+        freshnessScore,
+        sourceQualityScore,
+        freshness,
+      });
+
+      return {
+        document,
+        relevanceScore: similarity,
+        freshnessScore,
+        score,
+      };
+    });
+
+    return selectDiverseResults(
+      scored,
+      maxResults,
+      (entry) =>
+        entry.document.sourceDomain ??
+        getSourceDomain(entry.document.sourceUrl),
+      (entry) => entry.score,
+    );
+  }
+
+  async searchHybrid(
+    queryText: string,
+    queryEmbedding: number[] | null,
+    freshness: RetrievalFreshness,
+    maxResults: number,
+  ): Promise<KnowledgeStoreSearchResult[]> {
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      return this.search(queryText, freshness, maxResults);
+    }
+
+    const oversample = Math.max(maxResults, 6) * 2;
+    const [lexical, vector] = await Promise.all([
+      this.search(queryText, freshness, oversample),
+      this.searchByEmbedding(queryEmbedding, freshness, oversample),
+    ]);
+
+    if (lexical.length === 0 && vector.length === 0) {
+      return [];
+    }
+
+    if (vector.length === 0) {
+      return lexical.slice(0, maxResults);
+    }
+
+    if (lexical.length === 0) {
+      return vector.slice(0, maxResults);
+    }
+
+    const fused = new Map<string, KnowledgeStoreSearchResult>();
+    const lexicalIndex = new Map<string, number>();
+    const vectorIndex = new Map<string, number>();
+
+    lexical.forEach((entry, index) => {
+      lexicalIndex.set(entry.document.evidenceId, index);
+      fused.set(entry.document.evidenceId, entry);
+    });
+
+    vector.forEach((entry, index) => {
+      vectorIndex.set(entry.document.evidenceId, index);
+      const existing = fused.get(entry.document.evidenceId);
+      if (!existing || entry.relevanceScore > existing.relevanceScore) {
+        fused.set(entry.document.evidenceId, entry);
+      }
+    });
+
+    const FUSE_K = 60;
+    const blended: KnowledgeStoreSearchResult[] = [];
+
+    for (const [evidenceId, entry] of fused) {
+      const lexicalRank = lexicalIndex.get(evidenceId);
+      const vectorRank = vectorIndex.get(evidenceId);
+      const lexicalContribution =
+        typeof lexicalRank === 'number' ? 1 / (FUSE_K + lexicalRank) : 0;
+      const vectorContribution =
+        typeof vectorRank === 'number' ? 1 / (FUSE_K + vectorRank) : 0;
+      const fusedScore = clampUnit(
+        (lexicalContribution + vectorContribution) * (FUSE_K + 1),
+      );
+
+      blended.push({
+        document: entry.document,
+        relevanceScore: entry.relevanceScore,
+        freshnessScore: entry.freshnessScore,
+        score: clampUnit(0.55 * fusedScore + 0.45 * entry.score),
+      });
+    }
+
+    blended.sort((left, right) => right.score - left.score);
+
+    return selectDiverseResults(
+      blended,
+      maxResults,
+      (entry) =>
+        entry.document.sourceDomain ??
+        getSourceDomain(entry.document.sourceUrl),
+      (entry) => entry.score,
+    );
+  }
+
+  private get embeddingModelId(): string {
+    return (
+      this.configService.get<string>('EMBEDDING_SERVICE_MODEL_ID') ||
+      serviceRuntimeConfig.embeddingService.modelId
+    );
+  }
+
+  private get embeddingDimensions(): number {
+    const raw =
+      this.configService.get<string>('EMBEDDING_SERVICE_DIMENSIONS') ||
+      String(serviceRuntimeConfig.embeddingService.dimensions);
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isInteger(parsed) && parsed > 0
+      ? parsed
+      : serviceRuntimeConfig.embeddingService.dimensions;
+  }
+
+  private toVectorLiteral(embedding: number[]): string {
+    if (!Array.isArray(embedding) || embedding.length === 0) {
+      throw new Error(
+        'Cannot serialize empty embedding to a pgvector literal.',
+      );
+    }
+
+    const parts = embedding.map((value) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) {
+        throw new Error('Embedding contained a non-finite value.');
+      }
+      return value.toString();
+    });
+
+    return `[${parts.join(',')}]`;
   }
 
   private mapPreparedChunkToDocument(

@@ -63,7 +63,7 @@ describe('UtilityLlmService', () => {
       get: jest.fn((key: string) => {
         const values: Record<string, string> = {
           UTILITY_LLM_ENABLED: 'true',
-          UTILITY_LLM_HOST_URL: 'http://127.0.0.1:3000',
+          UTILITY_LLM_HOST_URL: 'http://127.0.0.1:3213',
           UTILITY_LLM_TIMEOUT_MS: timeoutMs,
           UTILITY_LLM_RETRIES: '0',
         };
@@ -78,8 +78,7 @@ describe('UtilityLlmService', () => {
   beforeEach(() => {
     FakeWebSocket.onSend = null;
     FakeWebSocket.instances = [];
-    (globalThis as { WebSocket: unknown }).WebSocket =
-      FakeWebSocket as unknown as typeof WebSocket;
+    (globalThis as { WebSocket: unknown }).WebSocket = FakeWebSocket;
   });
 
   afterEach(() => {
@@ -121,7 +120,7 @@ describe('UtilityLlmService', () => {
     expect(result.usedForQuery).toBe(true);
     expect(result.diagnostics[0]?.succeeded).toBe(true);
     expect(FakeWebSocket.instances[0]?.url).toBe(
-      'ws://127.0.0.1:3000/v2/infer/stream',
+      'ws://127.0.0.1:3213/v2/infer/stream',
     );
   });
 

@@ -11,6 +11,7 @@ to a high-quality retrieval system.
 - Retrieval policy: deterministic local/live routing
 - Local HTTP binding: `127.0.0.1:3001`
 - Utility LLM Host: called over the v2 WebSocket inference stream for retrieval support
+- Embedding Service: called over HTTP on `127.0.0.1:3002`; backed locally by CPU-only `llama-server-embedding` on `127.0.0.1:8081`
 
 ## 1. Utility LLM Host Client
 
@@ -33,7 +34,7 @@ Work:
 
 Acceptance criteria:
 
-- [x] RAG can call the Utility LLM Host on `127.0.0.1:3000` in local development.
+- [x] RAG can call the Utility LLM Host on `127.0.0.1:3213` in local development.
 - [x] Retrieval still works without the Utility LLM Host, with clear diagnostics.
 - [x] Unit tests cover success, timeout, malformed response, and unavailable-host paths.
 
@@ -59,7 +60,7 @@ Work:
 - [x] Add database connection config and service-managed migrations.
 - [x] Model documents, chunks, retrieval runs, lexical search vectors, and future embedding fields.
 - [x] Keep the existing JSON store only as a no-database fallback.
-- [ ] Add backup/restore instructions before using the database as the long-term source of truth.
+- [x] Add backup/restore instructions before using the database as the long-term source of truth.
 - [ ] Add an import path for any useful existing `data/knowledge-store.json` content.
 
 Acceptance criteria:
@@ -70,7 +71,7 @@ Acceptance criteria:
 
 ## 3. Ingestion And Indexing Pipeline
 
-Status: baseline implemented
+Status: baseline implemented with embedding worker
 
 Goal: turn live web results and manually seeded material into normalized, deduplicated, retrievable
 knowledge.
@@ -83,6 +84,9 @@ Work:
 - [x] Chunk documents with stable chunk IDs.
 - [x] Extract title, publication time, source type, and freshness metadata.
 - [x] Add embedding jobs for new or changed chunks.
+- [x] Add a worker that drains `rag_embedding_jobs` through the Embedding Service.
+- [x] Persist generated document embeddings to PostgreSQL `pgvector` columns.
+- [x] Reclaim stale `in_progress` embedding jobs after worker crashes.
 - [x] Add refresh policy for stale or volatile sources.
 - [x] Add a JSON cache import command.
 - [ ] Add a seed/import command for arbitrary local documents and known URLs.
@@ -96,7 +100,7 @@ Acceptance criteria:
 
 ## 4. Hybrid Retrieval
 
-Status: partial baseline implemented
+Status: baseline implemented
 
 Goal: retrieve better evidence by combining lexical matching, vector similarity, freshness, and source
 quality.
@@ -104,8 +108,10 @@ quality.
 Work:
 
 - [x] Implement PostgreSQL full-text retrieval.
-- [ ] Implement vector retrieval through `pgvector`; blocked until the Embedding Service contract/worker exists.
+- [x] Implement vector retrieval through `pgvector`.
+- [x] Embed live local queries through the Embedding Service with `inputType: query`.
 - [x] Blend lexical/trigram score, freshness score, and source quality.
+- [x] Fuse lexical and vector result sets for local retrieval.
 - [x] Add source-quality heuristics per domain/source type.
 - [x] Add diversity selection with an MMR-style domain penalty.
 - [ ] Add reranking support, initially deterministic and later Utility LLM assisted if useful.
@@ -117,7 +123,7 @@ Acceptance criteria:
 - [x] Retrieval prefers fresh/live evidence for high and realtime queries.
 - [x] Duplicate or near-duplicate chunks are suppressed.
 - [x] Result sets include source diversity when multiple sources are available.
-- [ ] Vector similarity contributes to ranking once embeddings are produced.
+- [x] Vector similarity contributes to ranking once embeddings are produced.
 
 ## 5. Evaluations
 
@@ -154,6 +160,8 @@ Work:
 - [x] Add backup and restore procedure for the PostgreSQL store.
 - [x] Add PostgreSQL status script for migrations, document/chunk counts, embedding jobs, and retrieval runs.
 - [x] Add PM2 runbook notes for RAG, Utility LLM Host, and dependencies.
+- [x] Add health diagnostics for Embedding Service readiness and embedding-job counts.
+- [x] Add degraded-mode behavior when query embedding fails; lexical local retrieval still runs.
 - [ ] Add structured logging for retrieval runs, provider calls, cache writes, and model-host calls.
 - [ ] Add provider cost tracking for Exa search/extract usage.
 - [ ] Add caller timeout handling and request budget propagation.

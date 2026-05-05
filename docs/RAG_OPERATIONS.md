@@ -10,7 +10,9 @@ Invoke-RestMethod http://127.0.0.1:3001/v2/health
 
 `data.knowledgeStore.ready` identifies PostgreSQL availability. `data.providers.exaConfigured`
 identifies whether live web retrieval can run. `data.providers.utilityLlm` identifies whether the
-Utility LLM Host is configured and reachable.
+Utility LLM Host is configured and reachable. `data.providers.embeddingService` identifies whether
+the Embedding Service is configured and ready. `data.embeddingJobs` reports pending, in-progress,
+done, failed, and embedded chunk counts for the configured embedding model.
 
 For direct PostgreSQL visibility:
 
@@ -99,6 +101,21 @@ Check local services:
 pm2 status
 pm2 logs swirlock-rag-engine
 pm2 logs swirlock-llm-host
+pm2 logs swirlock-embedding-service
+pm2 logs llama-server-embedding
+```
+
+The local Embedding Service has two PM2 processes:
+
+- `swirlock-embedding-service` exposes the v3 contract-compatible HTTP API on `127.0.0.1:3002`.
+- `llama-server-embedding` is the CPU-only llama.cpp backend on `127.0.0.1:8081`.
+
+If `/v2/model/status` on the Embedding Service reports `upstreamReachable: false`, restart the
+llama backend:
+
+```powershell
+pm2 start D:\swirlock\llama.cpp\ecosystem.config.cjs
+pm2 save
 ```
 
 ## Failure Triage
@@ -113,5 +130,8 @@ Utility LLM Host failures show up under `providers.utilityLlm` in health and und
 `retrievalDiagnostics.utilityLlm.calls` in retrieval responses. Retrieval degrades to deterministic
 query handling when Utility LLM support is unavailable.
 
-Embedding jobs are queued in `rag_embedding_jobs`. They are expected to remain pending until an
-Embedding Service contract and worker are implemented.
+Embedding Service failures show up under `providers.embeddingService` in health and under
+`retrievalDiagnostics.embeddingService.calls` in retrieval responses. Query embedding failures
+degrade local retrieval to lexical search. Document embedding failures are recorded in
+`rag_embedding_jobs`; the worker retries pending jobs with backoff and reclaims stale `in_progress`
+jobs after a crash.

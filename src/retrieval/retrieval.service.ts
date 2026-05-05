@@ -8,6 +8,7 @@ import {
   resolveSearchQuery,
   type SearchQueryResolution,
 } from '../search/search-query-resolver';
+import { EmbeddingServiceService } from './embedding-service.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
 import {
@@ -26,6 +27,7 @@ import type {
   RetrievalMode,
   ValidatedRetrieveEvidenceRequest,
 } from './retrieval.types';
+import type { EmbeddingCallDiagnostics } from './embedding-service.types';
 import type { UtilityLlmCallDiagnostics } from './utility-llm.types';
 
 interface LiveRetrievalResult {
@@ -46,6 +48,15 @@ interface UtilityLlmRetrievalState {
   calls: UtilityLlmCallDiagnostics[];
 }
 
+interface EmbeddingRetrievalState {
+  enabled: boolean;
+  configuredUrl: string;
+  modelId: string;
+  dimensions: number;
+  usedForQuery: boolean;
+  calls: EmbeddingCallDiagnostics[];
+}
+
 @Injectable()
 export class RetrievalService {
   private readonly logger = new Logger(RetrievalService.name);
@@ -56,6 +67,7 @@ export class RetrievalService {
     private readonly knowledgeStore: KnowledgeStoreService,
     private readonly retrievalPolicy: RetrievalPolicyService,
     private readonly utilityLlmService: UtilityLlmService,
+    private readonly embeddingService: EmbeddingServiceService,
   ) {}
 
   async retrieveEvidence(
@@ -82,6 +94,15 @@ export class RetrievalService {
       usedForImages: false,
       usedForExtractionSummaries: false,
       usedForEvidenceSynthesis: false,
+      calls: [],
+    };
+    const embeddingConfig = this.embeddingService.getConfiguration();
+    const embeddingState: EmbeddingRetrievalState = {
+      enabled: embeddingConfig.enabled,
+      configuredUrl: embeddingConfig.url,
+      modelId: embeddingConfig.modelId,
+      dimensions: embeddingConfig.dimensions,
+      usedForQuery: false,
       calls: [],
     };
     const utilitySupport = await this.utilityLlmService.prepareRetrievalSupport(
@@ -122,12 +143,41 @@ export class RetrievalService {
       (imageParts.length > 0 ? 'image-supported-retrieval' : 'general');
     const shouldProbeLocal =
       hasSearchableText && request.query.allowedModes.includes('local_rag');
+    const caveats: string[] = [];
+    let queryEmbedding: number[] | null = null;
+
+    if (shouldProbeLocal && embeddingState.enabled) {
+      const { result, diagnostics } = await this.embeddingService.embed(
+        correlationId,
+        [effectiveQuery],
+        'query',
+      );
+
+      embeddingState.calls.push(diagnostics);
+
+      if (diagnostics.succeeded && result.embeddings[0]) {
+        queryEmbedding = result.embeddings[0];
+        embeddingState.usedForQuery = true;
+      } else if (diagnostics.attempted && diagnostics.error) {
+        caveats.push(
+          `Embedding query generation failed; local retrieval used lexical search only: ${diagnostics.error}`,
+        );
+      }
+    }
+
     const localResults = shouldProbeLocal
-      ? await this.knowledgeStore.search(
-          effectiveQuery,
-          request.query.freshness,
-          request.query.maxEvidenceChunks * 2,
-        )
+      ? queryEmbedding
+        ? await this.knowledgeStore.searchHybrid(
+            effectiveQuery,
+            queryEmbedding,
+            request.query.freshness,
+            request.query.maxEvidenceChunks * 2,
+          )
+        : await this.knowledgeStore.search(
+            effectiveQuery,
+            request.query.freshness,
+            request.query.maxEvidenceChunks * 2,
+          )
       : [];
     const policyDecision = this.retrievalPolicy.decide({
       allowedModes: request.query.allowedModes,
@@ -136,7 +186,6 @@ export class RetrievalService {
       hasSearchableText,
       hasImageInput: imageParts.length > 0,
     });
-    const caveats: string[] = [];
     const localChunks = policyDecision.useLocal
       ? localResults.map((result) => this.mapLocalResultToEvidence(result))
       : [];
@@ -228,6 +277,7 @@ export class RetrievalService {
       ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
       ...(caveats.length > 0 ? { warnings: caveats } : {}),
       utilityLlm: utilityState,
+      embeddingService: embeddingState,
       knowledgeStorePath: this.knowledgeStore.storePath,
       knowledgeStoreKind: this.knowledgeStore.storeKind,
     };
@@ -449,8 +499,8 @@ export class RetrievalService {
       sourceTitle: `Image reference ${index + 1}`,
       ...(part.imageUrl ? { sourceUrl: part.imageUrl } : {}),
       content: part.imageUrl
-        ? `Image URL received for retrieval support: ${part.imageUrl}. Utility-model visual interpretation is not configured in this phase.`
-        : `Image ID received for retrieval support: ${part.imageId}. Utility-model visual interpretation is not configured in this phase.`,
+        ? `Image URL received for retrieval support: ${part.imageUrl}. Utility LLM image observations are reported on normalizedQuery.imageObservations when available.`
+        : `Image ID received for retrieval support: ${part.imageId}. Utility LLM image observations require a media resolver before RAG can fetch image bytes.`,
       relevanceScore: retrievalMode === 'none' ? 0.2 : 0.1,
       freshnessScore: 1,
       retrievedAt,
