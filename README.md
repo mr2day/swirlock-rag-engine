@@ -191,17 +191,16 @@ Service contract on `127.0.0.1:3002`.
 
 ## Contract API
 
-The phase-one contract endpoint is:
+The contract endpoint is:
 
-- `POST /v2/retrieval/evidence`
-- `POST /v2/retrieval/evidence/stream`
+- WebSocket `/v2/retrieval/evidence/stream`
 
 All contract calls require:
 
 - `x-correlation-id`
 - a JSON body with `requestContext` and `query`
 
-The endpoint returns the common contract envelope:
+Health and status endpoints return the common contract envelope:
 
 ```json
 {
@@ -220,11 +219,12 @@ The endpoint returns the common contract envelope:
 }
 ```
 
-The streaming endpoint uses the same request body and returns
-`text/event-stream`. Each SSE message uses the event type as the SSE `event`
-name and a JSON `RetrievalStreamEvent` as `data`. The final successful event is
-`retrieval.completed`; its payload contains the same retrieval data returned by
-`POST /v2/retrieval/evidence`.
+The WebSocket endpoint accepts one initial
+`{ "type": "retrieve_evidence", "correlationId": "...", "request": ... }`
+message. `request` is a `RetrieveEvidenceRequest`. The service then sends
+one JSON `RetrievalStreamEvent` per WebSocket message. The final successful
+event is `retrieval.completed`; its payload contains the completed retrieval
+package.
 
 Streaming events are intended for orchestrator/UI progress:
 

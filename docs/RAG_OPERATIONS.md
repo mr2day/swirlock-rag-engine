@@ -27,12 +27,23 @@ Expected local extensions are `citext`, `pg_trgm`, `plpgsql`, `unaccent`, and `v
 The streaming retrieval endpoint is:
 
 ```text
-POST /v2/retrieval/evidence/stream
+WS /v2/retrieval/evidence/stream
 ```
 
-It accepts the same request body as `POST /v2/retrieval/evidence`, but responds with
-`text/event-stream`. Use it from the Chat Orchestrator when the UI needs live "searching" progress
-and discovered-source updates. The stream ends with `retrieval.completed` on success or
+After upgrade, send one JSON message:
+
+```json
+{
+  "type": "retrieve_evidence",
+  "correlationId": "...",
+  "request": { "...": "RetrieveEvidenceRequest" }
+}
+```
+
+`request` is a `RetrieveEvidenceRequest`. The service returns one JSON
+`RetrievalStreamEvent` per WebSocket message. Use this from the Chat
+Orchestrator when the UI needs live search progress and discovered-source
+updates. The stream ends with `retrieval.completed` on success or
 `retrieval.failed` on failure.
 
 ## Migrations

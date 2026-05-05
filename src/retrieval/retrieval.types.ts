@@ -1,5 +1,3 @@
-import type { ApiEnvelope } from '../common/api-envelope';
-
 export type RequestPriority = 'interactive' | 'background' | 'maintenance';
 export type RetrievalFreshness = 'low' | 'medium' | 'high' | 'realtime';
 export type RetrievalAllowedMode = 'local_rag' | 'live_web';
@@ -142,8 +140,6 @@ export interface RetrieveEvidenceData {
   evidenceSynthesis?: EvidenceSynthesis;
   retrievalDiagnostics: RetrievalDiagnostics;
 }
-
-export type RetrieveEvidenceResponse = ApiEnvelope<RetrieveEvidenceData>;
 
 export type RetrievalStreamEventType =
   | 'retrieval.started'

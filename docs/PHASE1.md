@@ -6,8 +6,7 @@ The RAG Engine now has a contract-facing `v2` retrieval endpoint plus the older 
 
 Implemented:
 
-- `POST /v2/retrieval/evidence`
-- `POST /v2/retrieval/evidence/stream`
+- WebSocket `/v2/retrieval/evidence/stream`
 - `GET /v2/health`
 - shared `meta` response envelopes for the contract route
 - contract-shaped validation and error envelopes
@@ -21,7 +20,7 @@ Implemented:
 - live Exa search-then-extract wiring
 - cache persistence from successful live extraction
 - evidence chunk ranking, deduplication, and lightweight synthesis
-- Server-Sent Events retrieval stream for orchestrator-visible progress and source discovery
+- WebSocket retrieval stream for orchestrator-visible progress and source discovery
 - baseline retrieval evaluation command
 - PM2-ready `ecosystem.config.cjs`
 
@@ -37,10 +36,10 @@ Phase one uses deterministic retrieval policy plus optional Utility LLM Host sup
 
 The local knowledge store is PostgreSQL-backed when `RAG_DATABASE_URL` is configured. It uses PostgreSQL full-text search, chunks extracted documents, records refresh metadata, queues embedding jobs, stores `pgvector` embeddings, and performs baseline lexical/vector hybrid retrieval. It is intentionally separate from chatbot memory.
 
-The streaming endpoint returns the same final retrieval package as the blocking endpoint, but emits
-progress events before the final result. The Chat Orchestrator should use these events to show
-searching status and discovered sources while RAG continues searching, extracting, embedding, and
-packaging evidence.
+The WebSocket endpoint emits progress events before the final retrieval
+package. The Chat Orchestrator uses these events to show searching status
+and discovered sources while RAG continues searching, extracting, embedding,
+and packaging evidence.
 
 ## Runtime Configuration
 
@@ -77,4 +76,4 @@ If `RAG_DATABASE_URL` is omitted, the service falls back to `data/knowledge-stor
 - Add deterministic and/or model-assisted reranking on top of fused local retrieval.
 - Add provider cost tracking and broader request budget propagation.
 - Add OpenAPI-generated DTO parity or schema validation if the contracts stabilize.
-- Integrate `POST /v2/retrieval/evidence/stream` from the Chat Orchestrator UI flow.
+- Continue hardening Chat Orchestrator WebSocket integration.

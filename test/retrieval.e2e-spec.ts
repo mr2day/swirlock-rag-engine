@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
-import request from 'supertest';
+import type { AddressInfo } from 'node:net';
+import WebSocket from 'ws';
 import { App } from 'supertest/types';
-import type { ErrorEnvelope } from '../src/common/api-envelope';
 import { AppModule } from './../src/app.module';
 import { EmbeddingServiceService } from '../src/retrieval/embedding-service.service';
 import { EmbeddingWorkerService } from '../src/retrieval/embedding-worker.service';
-import type { RetrieveEvidenceResponse } from '../src/retrieval/retrieval.types';
+import { RetrievalService } from '../src/retrieval/retrieval.service';
+import { attachRetrievalStreamServer } from '../src/retrieval/retrieval-stream-ws';
 import { UtilityLlmService } from '../src/retrieval/utility-llm.service';
 
 describe('RetrievalController (e2e)', () => {
@@ -91,14 +92,23 @@ describe('RetrievalController (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
-    await app.init();
+    await app.listen(0);
+    attachRetrievalStreamServer(
+      app.getHttpServer(),
+      app.get(RetrievalService),
+    );
   });
 
-  it('/v2/retrieval/evidence (POST)', async () => {
-    const response = await request(app.getHttpServer())
-      .post('/v2/retrieval/evidence')
-      .set('x-correlation-id', 'e2e-retrieval')
-      .send({
+  it('/v2/retrieval/evidence/stream (WebSocket)', async () => {
+    const address = app.getHttpServer().address() as AddressInfo;
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${address.port}/v2/retrieval/evidence/stream`,
+      { headers: { 'x-correlation-id': 'e2e-retrieval-ws' } },
+    );
+    const events = await collectWebSocketEvents(ws, {
+      type: 'retrieve_evidence',
+      correlationId: 'e2e-retrieval-ws',
+      request: {
         requestContext: {
           callerService: 'e2e-test',
           priority: 'interactive',
@@ -111,37 +121,8 @@ describe('RetrievalController (e2e)', () => {
           maxEvidenceChunks: 2,
           synthesisMode: 'brief',
         },
-      })
-      .expect(200);
-    const body = response.body as RetrieveEvidenceResponse;
-
-    expect(body.meta.correlationId).toBe('e2e-retrieval');
-    expect(body.meta.apiVersion).toBe('v2');
-    expect(body.data.normalizedQuery.retrievalMode).toBe('local_rag');
-    expect(Array.isArray(body.data.evidenceChunks)).toBe(true);
-  });
-
-  it('/v2/retrieval/evidence/stream (POST)', async () => {
-    const response = await request(app.getHttpServer())
-      .post('/v2/retrieval/evidence/stream')
-      .set('x-correlation-id', 'e2e-retrieval-stream')
-      .send({
-        requestContext: {
-          callerService: 'e2e-test',
-          priority: 'interactive',
-          requestedAt: '2026-05-01T12:00:00Z',
-        },
-        query: {
-          parts: [{ type: 'text', text: 'phase one local retrieval smoke' }],
-          freshness: 'low',
-          allowedModes: ['local_rag'],
-          maxEvidenceChunks: 2,
-          synthesisMode: 'brief',
-        },
-      })
-      .expect(200)
-      .expect('Content-Type', /text\/event-stream/);
-    const events = parseSseEvents(response.text);
+      },
+    });
 
     expect(events.map((event) => event.type)).toEqual(
       expect.arrayContaining([
@@ -154,41 +135,51 @@ describe('RetrievalController (e2e)', () => {
     expect(events.at(-1)?.type).toBe('retrieval.completed');
   });
 
-  function parseSseEvents(text: string): Array<{ type: string }> {
-    return text
-      .split(/\n\n/)
-      .map((block) =>
-        block
-          .split(/\n/)
-          .find((line) => line.startsWith('data: '))
-          ?.slice('data: '.length),
-      )
-      .filter((line): line is string => Boolean(line))
-      .map((line) => JSON.parse(line) as { type: string });
+  function collectWebSocketEvents(
+    ws: WebSocket,
+    firstMessage: Record<string, unknown>,
+  ): Promise<Array<{ type: string }>> {
+    return new Promise((resolve, reject) => {
+      const events: Array<{ type: string }> = [];
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('timed out waiting for retrieval WebSocket events'));
+      }, 10_000);
+      const cleanup = (): void => {
+        clearTimeout(timer);
+        ws.off('open', onOpen);
+        ws.off('message', onMessage);
+        ws.off('close', onClose);
+        ws.off('error', onError);
+      };
+      const onOpen = (): void => {
+        ws.send(JSON.stringify(firstMessage));
+      };
+      const onMessage = (raw: WebSocket.RawData): void => {
+        events.push(JSON.parse(rawToString(raw)) as { type: string });
+      };
+      const onClose = (): void => {
+        cleanup();
+        resolve(events);
+      };
+      const onError = (error: Error): void => {
+        cleanup();
+        reject(error);
+      };
+
+      ws.on('open', onOpen);
+      ws.on('message', onMessage);
+      ws.on('close', onClose);
+      ws.on('error', onError);
+    });
   }
 
-  it('returns a contract error envelope when correlation id is missing', async () => {
-    const response = await request(app.getHttpServer())
-      .post('/v2/retrieval/evidence')
-      .send({
-        requestContext: {
-          callerService: 'e2e-test',
-          priority: 'interactive',
-          requestedAt: '2026-05-01T12:00:00Z',
-        },
-        query: {
-          parts: [{ type: 'text', text: 'phase one local retrieval smoke' }],
-          freshness: 'low',
-          allowedModes: ['local_rag'],
-        },
-      })
-      .expect(400);
-    const body = response.body as ErrorEnvelope;
-
-    expect(body.meta.apiVersion).toBe('v2');
-    expect(body.error.code).toBe('validation_failed');
-    expect(body.error.message).toContain('x-correlation-id');
-  });
+  function rawToString(raw: WebSocket.RawData): string {
+    if (typeof raw === 'string') return raw;
+    if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+    if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
+    return Buffer.from(raw).toString('utf8');
+  }
 
   afterEach(async () => {
     await app.close();
