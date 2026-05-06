@@ -13,30 +13,32 @@ import type {
   UtilityLlmStatus,
 } from './utility-llm.types';
 
-type StreamEvent =
-  | { type: 'accepted' | 'started'; meta?: Record<string, unknown> }
-  | { type: 'queued'; meta?: Record<string, unknown>; data?: unknown }
+type StreamEvent = { correlationId?: string } & (
+  | { type: 'accepted' | 'started'; payload?: Record<string, unknown> }
+  | { type: 'queued'; payload?: unknown }
   | {
       type: 'thinking';
-      meta?: Record<string, unknown>;
-      data?: { text?: string };
+      payload?: { text?: string };
     }
-  | { type: 'chunk'; meta?: Record<string, unknown>; data?: { text?: string } }
+  | { type: 'chunk'; payload?: { text?: string } }
   | {
       type: 'done';
-      meta?: Record<string, unknown>;
-      data?: { finishReason?: string };
+      payload?: { finishReason?: string };
+    }
+  | {
+      type: 'model.status';
+      payload?: Record<string, unknown>;
     }
   | {
       type: 'error';
-      meta?: Record<string, unknown>;
       error?: {
         code?: string;
         message?: string;
         retryable?: boolean;
         details?: Record<string, unknown>;
       };
-    };
+    }
+);
 
 interface StreamInferOptions {
   correlationId: string;
@@ -53,9 +55,19 @@ interface StreamInferResult {
   diagnostics: UtilityLlmCallDiagnostics;
 }
 
+interface PendingUtilityRequest {
+  output: string;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: (value: string) => void;
+  reject: (error: Error) => void;
+}
+
 @Injectable()
 export class UtilityLlmService {
   private readonly logger = new Logger(UtilityLlmService.name);
+  private socket: WebSocket | null = null;
+  private connecting: Promise<WebSocket> | null = null;
+  private readonly pending = new Map<string, PendingUtilityRequest>();
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -79,28 +91,19 @@ export class UtilityLlmService {
     }
 
     try {
-      const response = await this.fetchWithTimeout(
-        this.statusUrl,
-        {
-          headers: {
-            'x-correlation-id': correlationId,
-          },
-        },
-        this.timeoutMs,
-      );
-      const payload = (await response.json()) as unknown;
+      const payload = await this.requestPayload('model.status', correlationId);
 
-      if (!response.ok || !isRecord(payload) || !isRecord(payload.data)) {
+      if (!isRecord(payload)) {
         return {
           enabled: true,
           configuredUrl: this.hostUrl,
           ready: false,
-          error: `Utility LLM Host status request failed with HTTP ${response.status}.`,
+          error: 'Utility LLM Host status response was malformed.',
           durationMs: Date.now() - startedAt,
         };
       }
 
-      const data = payload.data;
+      const data = payload;
       const capabilities = normalizeModelCapabilities(data.capabilities);
       const capacity = normalizeModelCapacity(data.capacity);
 
@@ -390,12 +393,10 @@ export class UtilityLlmService {
 
   private streamInferOnce(options: StreamInferOptions): Promise<string> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(this.streamUrl);
-      let settled = false;
-      let completed = false;
-      let output = '';
       const timeout = setTimeout(() => {
-        finish(
+        this.pending.delete(options.correlationId);
+        this.sendCancel(options.correlationId);
+        reject(
           new UtilityLlmError(
             `Timed out after ${this.timeoutMs}ms waiting for Utility LLM Host.`,
             true,
@@ -403,106 +404,216 @@ export class UtilityLlmService {
         );
       }, this.timeoutMs);
 
-      const finish = (error: Error | null, value = '') => {
-        if (settled) {
-          return;
-        }
+      this.pending.set(options.correlationId, {
+        output: '',
+        timer: timeout,
+        resolve,
+        reject,
+      });
 
-        settled = true;
-        clearTimeout(timeout);
-
-        if (
-          socket.readyState === WebSocket.OPEN ||
-          socket.readyState === WebSocket.CONNECTING
-        ) {
-          socket.close();
-        }
-
-        if (error) {
-          reject(error);
-        } else {
-          resolve(value);
-        }
-      };
-
-      socket.addEventListener('open', () => {
-        socket.send(
-          JSON.stringify({
-            type: 'infer',
-            correlationId: options.correlationId,
-            request: {
-              requestContext: {
-                callerService: serviceRuntimeConfig.serviceName,
-                priority: options.priority,
-                requestedAt: new Date().toISOString(),
-              },
-              input: {
-                parts: [
-                  { type: 'text', text: options.prompt },
-                  ...this.toModelHostImageParts(options.imageParts ?? []),
-                ],
-              },
-              options: {
-                responseFormat: options.responseFormat ?? 'json',
-                thinking: false,
-                ollama: {
-                  temperature: options.temperature ?? 0,
+      void this.getSocket()
+        .then((socket) => {
+          socket.send(
+            JSON.stringify({
+              type: 'infer',
+              correlationId: options.correlationId,
+              payload: {
+                request: {
+                  requestContext: {
+                    callerService: serviceRuntimeConfig.serviceName,
+                    priority: options.priority,
+                    requestedAt: new Date().toISOString(),
+                  },
+                  input: {
+                    parts: [
+                      { type: 'text', text: options.prompt },
+                      ...this.toModelHostImageParts(options.imageParts ?? []),
+                    ],
+                  },
+                  options: {
+                    responseFormat: options.responseFormat ?? 'json',
+                    thinking: false,
+                    ollama: {
+                      temperature: options.temperature ?? 0,
+                    },
+                  },
                 },
               },
-            },
-          }),
+            }),
+          );
+        })
+        .catch((error) => {
+          const pending = this.pending.get(options.correlationId);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(options.correlationId);
+          reject(
+            new UtilityLlmError(
+              error instanceof Error ? error.message : String(error),
+              true,
+            ),
+          );
+        });
+    });
+  }
+
+  private requestPayload(
+    type: string,
+    correlationId: string,
+    payload?: Record<string, unknown>,
+  ): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(correlationId);
+        this.sendCancel(correlationId);
+        reject(
+          new UtilityLlmError(
+            `Timed out after ${this.timeoutMs}ms waiting for Utility LLM Host.`,
+            true,
+          ),
         );
+      }, this.timeoutMs);
+
+      this.pending.set(correlationId, {
+        output: '',
+        timer: timeout,
+        resolve: (value) => resolve(parseJsonObject(value)),
+        reject,
+      });
+
+      void this.getSocket()
+        .then((socket) => {
+          socket.send(
+            JSON.stringify({
+              type,
+              correlationId,
+              ...(payload ? { payload } : {}),
+            }),
+          );
+        })
+        .catch((error) => {
+          const pending = this.pending.get(correlationId);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(correlationId);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+    });
+  }
+
+  private getSocket(): Promise<WebSocket> {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      return Promise.resolve(this.socket);
+    }
+    if (this.connecting) return this.connecting;
+
+    const connecting = new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(this.streamUrl);
+      const timeout = setTimeout(() => {
+        reject(new Error('Utility LLM Host WebSocket connect timeout.'));
+        try {
+          socket.close();
+        } catch {
+          /* ignore */
+        }
+      }, this.timeoutMs);
+
+      socket.addEventListener('open', () => {
+        clearTimeout(timeout);
+        this.socket = socket;
+        resolve(socket);
       });
 
       socket.addEventListener('message', (event) => {
-        const message = this.parseStreamEvent(event.data);
-
-        if (!message) {
-          finish(
-            new UtilityLlmError(
-              'Utility LLM Host sent a malformed WebSocket event.',
-              true,
-            ),
-          );
-          return;
-        }
-
-        if (message.type === 'chunk') {
-          output += message.data?.text ?? '';
-          return;
-        }
-
-        if (message.type === 'error') {
-          finish(
-            new UtilityLlmError(
-              message.error?.message || 'Utility LLM Host inference failed.',
-              message.error?.retryable !== false,
-            ),
-          );
-          return;
-        }
-
-        if (message.type === 'done') {
-          completed = true;
-          finish(null, output);
-        }
+        this.handleStreamEvent(event.data);
       });
 
       socket.addEventListener('error', () => {
-        finish(new UtilityLlmError('Utility LLM Host WebSocket failed.', true));
+        this.rejectAll(
+          new UtilityLlmError('Utility LLM Host WebSocket failed.', true),
+        );
       });
 
       socket.addEventListener('close', () => {
-        if (!completed && !settled) {
-          finish(
-            new UtilityLlmError(
-              'Utility LLM Host WebSocket closed before completion.',
-              true,
-            ),
-          );
+        if (this.socket === socket) {
+          this.socket = null;
         }
+        this.rejectAll(
+          new UtilityLlmError(
+            'Utility LLM Host WebSocket closed before completion.',
+            true,
+          ),
+        );
       });
+    }).finally(() => {
+      this.connecting = null;
     });
+
+    this.connecting = connecting;
+    return connecting;
+  }
+
+  private handleStreamEvent(value: unknown): void {
+    const message = this.parseStreamEvent(value);
+    if (!message) {
+      this.rejectAll(
+        new UtilityLlmError(
+          'Utility LLM Host sent a malformed WebSocket event.',
+          true,
+        ),
+      );
+      return;
+    }
+
+    const correlationId =
+      isRecord(message) && typeof message.correlationId === 'string'
+        ? message.correlationId
+        : '';
+    const pending = this.pending.get(correlationId);
+    if (!pending) return;
+
+    if (message.type === 'chunk') {
+      pending.output += message.payload?.text ?? '';
+      return;
+    }
+
+    if (message.type === 'error') {
+      clearTimeout(pending.timer);
+      this.pending.delete(correlationId);
+      pending.reject(
+        new UtilityLlmError(
+          message.error?.message || 'Utility LLM Host inference failed.',
+          message.error?.retryable !== false,
+        ),
+      );
+      return;
+    }
+
+    if (message.type === 'model.status') {
+      clearTimeout(pending.timer);
+      this.pending.delete(correlationId);
+      pending.resolve(JSON.stringify(message.payload ?? {}));
+      return;
+    }
+
+    if (message.type === 'done') {
+      clearTimeout(pending.timer);
+      this.pending.delete(correlationId);
+      pending.resolve(pending.output);
+    }
+  }
+
+  private sendCancel(correlationId: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'cancel', correlationId }));
+  }
+
+  private rejectAll(error: Error): void {
+    for (const [correlationId, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      this.pending.delete(correlationId);
+      pending.reject(error);
+    }
   }
 
   private toModelHostImageParts(
@@ -537,24 +648,6 @@ export class UtilityLlmService {
         : null;
     } catch {
       return null;
-    }
-  }
-
-  private async fetchWithTimeout(
-    url: string,
-    init: RequestInit,
-    timeoutMs: number,
-  ): Promise<Response> {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      return await fetch(url, {
-        ...init,
-        signal: controller.signal,
-      });
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
@@ -768,12 +861,8 @@ export class UtilityLlmService {
     return this.retries + 1;
   }
 
-  private get statusUrl(): string {
-    return new URL('/v2/model/status', this.hostUrl).toString();
-  }
-
   private get streamUrl(): string {
-    const url = new URL('/v2/infer/stream', this.hostUrl);
+    const url = new URL('/v4/model', this.hostUrl);
 
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 

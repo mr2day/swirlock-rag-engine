@@ -92,7 +92,8 @@ describe('UtilityLlmService', () => {
       socket.emitMessage({ type: 'started' });
       socket.emitMessage({
         type: 'chunk',
-        data: {
+        correlationId: 'test-correlation',
+        payload: {
           text: JSON.stringify({
             queryText: 'hybrid RAG evaluation',
             intent: 'rag-evaluation',
@@ -103,7 +104,11 @@ describe('UtilityLlmService', () => {
           }),
         },
       });
-      socket.emitMessage({ type: 'done', data: { finishReason: 'stop' } });
+      socket.emitMessage({
+        type: 'done',
+        correlationId: 'test-correlation',
+        payload: { finishReason: 'stop' },
+      });
     };
 
     const result = await makeService().prepareRetrievalSupport({
@@ -120,7 +125,7 @@ describe('UtilityLlmService', () => {
     expect(result.usedForQuery).toBe(true);
     expect(result.diagnostics[0]?.succeeded).toBe(true);
     expect(FakeWebSocket.instances[0]?.url).toBe(
-      'ws://127.0.0.1:3213/v2/infer/stream',
+      'ws://127.0.0.1:3213/v4/model',
     );
   });
 
@@ -148,8 +153,16 @@ describe('UtilityLlmService', () => {
     FakeWebSocket.onSend = (socket) => {
       socket.emitMessage({ type: 'accepted' });
       socket.emitMessage({ type: 'started' });
-      socket.emitMessage({ type: 'chunk', data: { text: 'not json' } });
-      socket.emitMessage({ type: 'done', data: { finishReason: 'stop' } });
+      socket.emitMessage({
+        type: 'chunk',
+        correlationId: 'test-correlation',
+        payload: { text: 'not json' },
+      });
+      socket.emitMessage({
+        type: 'done',
+        correlationId: 'test-correlation',
+        payload: { finishReason: 'stop' },
+      });
     };
 
     const result = await makeService().prepareRetrievalSupport({
@@ -165,11 +178,12 @@ describe('UtilityLlmService', () => {
     expect(result.warnings[0]).toContain('unusable JSON');
   });
 
-  it('returns model-host status through the HTTP status endpoint', async () => {
-    globalThis.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: jest.fn().mockResolvedValue({
-        data: {
+  it('returns model-host status through the WebSocket endpoint', async () => {
+    FakeWebSocket.onSend = (socket) => {
+      socket.emitMessage({
+        type: 'model.status',
+        correlationId: 'test-correlation',
+        payload: {
           modelId: 'gemma4:e4b',
           ready: true,
           loaded: true,
@@ -185,8 +199,8 @@ describe('UtilityLlmService', () => {
             queueDepth: 0,
           },
         },
-      }),
-    } as never);
+      });
+    };
 
     const status = await makeService().getStatus('test-correlation');
 

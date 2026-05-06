@@ -4,7 +4,7 @@ const rootDir = __dirname;
 
 const runtime = {
   serviceName: 'swirlock-rag-engine',
-  apiVersion: 'v2',
+  apiVersion: 'v4',
   host: '127.0.0.1',
   port: 3001,
   knowledgeStorePath: path.join(rootDir, 'data', 'knowledge-store.json'),

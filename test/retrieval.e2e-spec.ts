@@ -93,10 +93,7 @@ describe('RetrievalController (e2e)', () => {
 
     app = moduleFixture.createNestApplication();
     await app.listen(0);
-    attachRetrievalStreamServer(
-      app.getHttpServer(),
-      app.get(RetrievalService),
-    );
+    attachRetrievalStreamServer(app.getHttpServer(), app.get(RetrievalService));
   });
 
   it('/v2/retrieval/evidence/stream (WebSocket)', async () => {

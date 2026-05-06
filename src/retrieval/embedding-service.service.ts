@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import WebSocket from 'ws';
 import { serviceRuntimeConfig } from '../config/service-config';
 import type {
   EmbeddingCallDiagnostics,
@@ -8,11 +9,19 @@ import type {
   EmbeddingServiceStatus,
 } from './embedding-service.types';
 
-const FETCH_TIMEOUT_MARGIN_MS = 250;
-
 @Injectable()
 export class EmbeddingServiceService {
   private readonly logger = new Logger(EmbeddingServiceService.name);
+  private socket: WebSocket | null = null;
+  private connecting: Promise<WebSocket> | null = null;
+  private readonly pending = new Map<
+    string,
+    {
+      timer: ReturnType<typeof setTimeout>;
+      resolve: (payload: Record<string, unknown>) => void;
+      reject: (error: Error) => void;
+    }
+  >();
 
   constructor(private readonly configService: ConfigService) {}
 
@@ -135,28 +144,18 @@ export class EmbeddingServiceService {
     }
 
     try {
-      const response = await this.fetchWithTimeout(
-        new URL('/v2/model/status', this.url).toString(),
-        {
-          method: 'GET',
-          headers: { 'x-correlation-id': correlationId },
-        },
-        this.timeoutMs,
-      );
+      const data = await this.requestPayload('model.status', correlationId);
 
-      const payload = (await response.json()) as unknown;
-
-      if (!response.ok || !isRecord(payload) || !isRecord(payload.data)) {
+      if (!isRecord(data)) {
         return {
           enabled: true,
           configuredUrl: this.url,
           ready: false,
-          error: `Embedding service status request failed with HTTP ${response.status}.`,
+          error: 'Embedding service status response was malformed.',
           durationMs: Date.now() - startedAt,
         };
       }
 
-      const data = payload.data;
       const capabilities = isRecord(data.capabilities) ? data.capabilities : {};
       const capacity = normalizeCapacity(data.capacity);
 
@@ -206,31 +205,9 @@ export class EmbeddingServiceService {
       },
     };
 
-    const response = await this.fetchWithTimeout(
-      new URL('/v2/embeddings', this.url).toString(),
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-correlation-id': correlationId,
-        },
-        body: JSON.stringify(requestBody),
-      },
-      this.timeoutMs,
-    );
-
-    const payload = (await response.json().catch(() => null)) as unknown;
-
-    if (!response.ok || !isRecord(payload) || !isRecord(payload.data)) {
-      const message = readErrorMessage(payload, response.status);
-      const retryable =
-        response.status >= 500 ||
-        response.status === 408 ||
-        response.status === 429;
-      throw new EmbeddingServiceError(message, retryable);
-    }
-
-    const data = payload.data;
+    const data = await this.requestPayload('embed', correlationId, {
+      request: requestBody,
+    });
 
     if (!Array.isArray(data.embeddings)) {
       throw new EmbeddingServiceError(
@@ -311,32 +288,6 @@ export class EmbeddingServiceService {
     };
   }
 
-  private async fetchWithTimeout(
-    url: string,
-    init: RequestInit,
-    timeoutMs: number,
-  ): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(
-      () => controller.abort(),
-      timeoutMs + FETCH_TIMEOUT_MARGIN_MS,
-    );
-
-    try {
-      return await fetch(url, { ...init, signal: controller.signal });
-    } catch (error) {
-      if ((error as Error)?.name === 'AbortError') {
-        throw new EmbeddingServiceError(
-          `Embedding service request timed out after ${timeoutMs}ms.`,
-          true,
-        );
-      }
-      throw new EmbeddingServiceError(getErrorMessage(error), true);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
   private emptyResult(
     inputType: EmbeddingInputType,
     startedAt: number,
@@ -392,6 +343,178 @@ export class EmbeddingServiceService {
       serviceRuntimeConfig.embeddingService.retries,
     );
   }
+
+  private requestPayload(
+    type: string,
+    correlationId: string,
+    payload?: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(correlationId);
+        this.sendCancel(correlationId);
+        reject(
+          new EmbeddingServiceError(
+            `Embedding service request timed out after ${this.timeoutMs}ms.`,
+            true,
+          ),
+        );
+      }, this.timeoutMs);
+
+      this.pending.set(correlationId, { timer, resolve, reject });
+
+      void this.getSocket()
+        .then((socket) => {
+          socket.send(
+            JSON.stringify({
+              type,
+              correlationId,
+              ...(payload ? { payload } : {}),
+            }),
+          );
+        })
+        .catch((error) => {
+          const pending = this.pending.get(correlationId);
+          if (!pending) return;
+          clearTimeout(pending.timer);
+          this.pending.delete(correlationId);
+          reject(
+            new EmbeddingServiceError(
+              error instanceof Error ? error.message : String(error),
+              true,
+            ),
+          );
+        });
+    });
+  }
+
+  private getSocket(): Promise<WebSocket> {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      return Promise.resolve(this.socket);
+    }
+    if (this.connecting) return this.connecting;
+
+    const connecting = new Promise<WebSocket>((resolve, reject) => {
+      const socket = new WebSocket(this.streamUrl);
+      const timer = setTimeout(() => {
+        try {
+          socket.close();
+        } catch {
+          /* ignore */
+        }
+        reject(new Error('Embedding service WebSocket connect timeout.'));
+      }, this.timeoutMs);
+
+      socket.on('open', () => {
+        clearTimeout(timer);
+        this.socket = socket;
+        resolve(socket);
+      });
+
+      socket.on('message', (raw: WebSocket.RawData) => {
+        this.handleMessage(raw);
+      });
+
+      socket.on('error', () => {
+        this.rejectAll(
+          new EmbeddingServiceError(
+            'Embedding service WebSocket failed.',
+            true,
+          ),
+        );
+      });
+
+      socket.on('close', () => {
+        if (this.socket === socket) this.socket = null;
+        this.rejectAll(
+          new EmbeddingServiceError(
+            'Embedding service WebSocket closed.',
+            true,
+          ),
+        );
+      });
+    }).finally(() => {
+      this.connecting = null;
+    });
+
+    this.connecting = connecting;
+    return connecting;
+  }
+
+  private handleMessage(raw: WebSocket.RawData): void {
+    let message: unknown;
+    try {
+      message = JSON.parse(rawToString(raw));
+    } catch {
+      this.rejectAll(
+        new EmbeddingServiceError(
+          'Embedding service sent a non-JSON message.',
+          true,
+        ),
+      );
+      return;
+    }
+
+    if (
+      !isRecord(message) ||
+      typeof message.correlationId !== 'string' ||
+      typeof message.type !== 'string'
+    ) {
+      this.rejectAll(
+        new EmbeddingServiceError(
+          'Embedding service sent a malformed message.',
+          true,
+        ),
+      );
+      return;
+    }
+
+    const pending = this.pending.get(message.correlationId);
+    if (!pending) return;
+
+    if (message.type === 'error') {
+      clearTimeout(pending.timer);
+      this.pending.delete(message.correlationId);
+      const error = isRecord(message.error) ? message.error : {};
+      pending.reject(
+        new EmbeddingServiceError(
+          typeof error.message === 'string'
+            ? error.message
+            : 'Embedding service failed.',
+          error.retryable !== false,
+        ),
+      );
+      return;
+    }
+
+    if (message.type === 'embed.done' || message.type === 'model.status') {
+      clearTimeout(pending.timer);
+      this.pending.delete(message.correlationId);
+      pending.resolve(isRecord(message.payload) ? message.payload : {});
+    }
+  }
+
+  private sendCancel(correlationId: string): void {
+    if (this.socket?.readyState !== WebSocket.OPEN) return;
+    this.socket.send(JSON.stringify({ type: 'cancel', correlationId }));
+  }
+
+  private rejectAll(error: Error): void {
+    for (const [correlationId, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      this.pending.delete(correlationId);
+      pending.reject(error);
+    }
+  }
+
+  private get streamUrl(): string {
+    return (
+      this.url
+        .replace(/^http:/i, 'ws:')
+        .replace(/^https:/i, 'wss:')
+        .replace(/\/$/, '') + '/v4/embeddings'
+    );
+  }
 }
 
 class EmbeddingServiceError extends Error {
@@ -412,19 +535,15 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function readErrorMessage(payload: unknown, status: number): string {
-  if (
-    isRecord(payload) &&
-    isRecord(payload.error) &&
-    typeof payload.error.message === 'string'
-  ) {
-    return payload.error.message;
-  }
-  return `Embedding service responded with HTTP ${status}.`;
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function rawToString(raw: WebSocket.RawData): string {
+  if (typeof raw === 'string') return raw;
+  if (Buffer.isBuffer(raw)) return raw.toString('utf8');
+  if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
+  return Buffer.from(raw).toString('utf8');
 }
 
 function normalizeCapacity(value: unknown): EmbeddingServiceStatus['capacity'] {

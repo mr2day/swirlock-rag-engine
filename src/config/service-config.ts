@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 type ServiceConfigModule = {
   runtime: {
     serviceName: string;
-    apiVersion: 'v2';
+    apiVersion: 'v4';
     host: string;
     port: number;
     knowledgeStorePath: string;

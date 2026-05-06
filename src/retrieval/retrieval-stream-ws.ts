@@ -1,16 +1,21 @@
 import { Logger } from '@nestjs/common';
-import type { IncomingMessage, Server as HttpServer } from 'node:http';
+import type { Server as HttpServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
 import { RetrievalService } from './retrieval.service';
 import type { RetrievalStreamEvent } from './retrieval.types';
 
-const RETRIEVAL_STREAM_PATH = '/v2/retrieval/evidence/stream';
-const FIRST_MESSAGE_TIMEOUT_MS = 30_000;
+const RETRIEVAL_STREAM_PATH = '/v4/retrieval';
 
-interface RetrieveEvidenceStreamMessage {
-  type?: unknown;
-  correlationId?: unknown;
-  request?: unknown;
+interface V4Envelope {
+  type: string;
+  correlationId: string;
+  payload?: unknown;
+  error?: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    details?: Record<string, unknown>;
+  };
 }
 
 function rawToString(raw: WebSocket.RawData): string {
@@ -18,12 +23,6 @@ function rawToString(raw: WebSocket.RawData): string {
   if (Buffer.isBuffer(raw)) return raw.toString('utf8');
   if (Array.isArray(raw)) return Buffer.concat(raw).toString('utf8');
   return Buffer.from(raw).toString('utf8');
-}
-
-function firstHeaderValue(value: IncomingMessage['headers'][string]): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value) && value[0]) return value[0];
-  return '';
 }
 
 export function attachRetrievalStreamServer(
@@ -41,136 +40,164 @@ export function attachRetrievalStreamServer(
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      void handleRetrievalStream(ws, req, retrievalService, log).catch(
-        (error: Error) => {
-          log.error(`stream handler crashed: ${error.message}`, error.stack);
-          try {
-            ws.close();
-          } catch {
-            /* ignore */
-          }
-        },
-      );
+      handleRetrievalSocket(ws, retrievalService, log);
     });
   });
 }
 
-async function handleRetrievalStream(
+function handleRetrievalSocket(
   ws: WebSocket,
-  req: IncomingMessage,
   retrievalService: RetrievalService,
   log: Logger,
-): Promise<void> {
-  const headerCorrelationId = firstHeaderValue(
-    req.headers['x-correlation-id'],
-  ).trim();
-
-  let message: RetrieveEvidenceStreamMessage;
-  try {
-    message = await readFirstMessage(ws);
-  } catch (error) {
-    sendFailed(ws, 1, error instanceof Error ? error.message : String(error));
-    closeQuietly(ws);
-    return;
-  }
-
-  if (
-    message.type !== 'retrieve_evidence' ||
-    !message.request ||
-    typeof message.request !== 'object'
-  ) {
-    sendFailed(
-      ws,
-      1,
-      'first message must be { type: "retrieve_evidence", correlationId, request }',
-    );
-    closeQuietly(ws);
-    return;
-  }
-
-  const correlationId =
-    typeof message.correlationId === 'string' && message.correlationId.trim()
-      ? message.correlationId.trim()
-      : headerCorrelationId;
-
-  if (!correlationId) {
-    sendFailed(ws, 1, 'correlationId is required.');
-    closeQuietly(ws);
-    return;
-  }
-
-  let lastSequence = 0;
-  try {
-    await retrievalService.retrieveEvidence(
-      message.request,
-      correlationId,
-      (event) => {
-        lastSequence = event.sequence;
-        sendEvent(ws, event);
-      },
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log.warn(`[${correlationId}] retrieval stream failed: ${message}`);
-    sendFailed(ws, lastSequence + 1, message);
-  } finally {
-    closeQuietly(ws);
-  }
-}
-
-function readFirstMessage(
-  ws: WebSocket,
-): Promise<RetrieveEvidenceStreamMessage> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      cleanup();
-      reject(new Error('no retrieve_evidence message received within timeout'));
-    }, FIRST_MESSAGE_TIMEOUT_MS);
-
-    const onMessage = (raw: WebSocket.RawData): void => {
-      cleanup();
-      try {
-        resolve(JSON.parse(rawToString(raw)) as RetrieveEvidenceStreamMessage);
-      } catch {
-        reject(new Error('first message must be JSON'));
-      }
-    };
-    const onClose = (): void => {
-      cleanup();
-      reject(
-        new Error('client closed connection before sending retrieve_evidence'),
-      );
-    };
-    const cleanup = (): void => {
-      clearTimeout(timer);
-      ws.off('message', onMessage);
-      ws.off('close', onClose);
-    };
-
-    ws.once('message', onMessage);
-    ws.once('close', onClose);
+): void {
+  ws.on('message', (raw: WebSocket.RawData) => {
+    void handleMessage(ws, raw, retrievalService, log);
   });
 }
 
-function sendEvent(ws: WebSocket, event: RetrievalStreamEvent): void {
+async function handleMessage(
+  ws: WebSocket,
+  raw: WebSocket.RawData,
+  retrievalService: RetrievalService,
+  log: Logger,
+): Promise<void> {
+  let correlationId = 'missing-correlation-id';
+
+  try {
+    const message = parseEnvelope(raw);
+    correlationId = message.correlationId;
+
+    if (message.type === 'heartbeat') {
+      sendEnvelope(ws, {
+        type: 'heartbeat',
+        correlationId,
+        payload: { receivedAt: new Date().toISOString() },
+      });
+      return;
+    }
+
+    if (message.type === 'cancel') {
+      return;
+    }
+
+    if (message.type === 'health.get') {
+      sendEnvelope(ws, {
+        type: 'health',
+        correlationId,
+        payload: {
+          status: 'ok',
+          ready: true,
+          checkedAt: new Date().toISOString(),
+        },
+      });
+      return;
+    }
+
+    if (message.type !== 'retrieve_evidence') {
+      sendError(
+        ws,
+        correlationId,
+        'validation_failed',
+        'type must be retrieve_evidence, health.get, cancel, or heartbeat.',
+        false,
+      );
+      return;
+    }
+
+    const request = isRecord(message.payload)
+      ? message.payload.request
+      : undefined;
+    if (!isRecord(request)) {
+      sendError(
+        ws,
+        correlationId,
+        'validation_failed',
+        'payload.request is required.',
+        false,
+      );
+      return;
+    }
+
+    let lastSequence = 0;
+    await retrievalService.retrieveEvidence(request, correlationId, (event) => {
+      lastSequence = event.sequence;
+      sendRetrievalEvent(ws, correlationId, event);
+    });
+
+    void lastSequence;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log.warn(`[${correlationId}] retrieval stream failed: ${message}`);
+    sendError(ws, correlationId, 'internal_error', message, true);
+  }
+}
+
+function parseEnvelope(raw: WebSocket.RawData): V4Envelope {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawToString(raw));
+  } catch {
+    throw new Error('WebSocket message must be valid JSON.');
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error('WebSocket message must be an object.');
+  }
+
+  if (typeof parsed.type !== 'string' || !parsed.type.trim()) {
+    throw new Error('type is required.');
+  }
+
+  if (
+    typeof parsed.correlationId !== 'string' ||
+    !parsed.correlationId.trim()
+  ) {
+    throw new Error('correlationId is required.');
+  }
+
+  return {
+    type: parsed.type.trim(),
+    correlationId: parsed.correlationId.trim(),
+    payload: isRecord(parsed.payload) ? parsed.payload : undefined,
+  };
+}
+
+function sendRetrievalEvent(
+  ws: WebSocket,
+  correlationId: string,
+  event: RetrievalStreamEvent,
+): void {
+  sendEnvelope(ws, {
+    type: event.type,
+    correlationId,
+    payload: {
+      sequence: event.sequence,
+      occurredAt: event.occurredAt,
+      data: event.data,
+    },
+  });
+}
+
+function sendEnvelope(ws: WebSocket, event: V4Envelope): void {
   if (ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify(event));
   }
 }
 
-function sendFailed(ws: WebSocket, sequence: number, message: string): void {
-  sendEvent(ws, {
-    type: 'retrieval.failed',
-    sequence,
-    occurredAt: new Date().toISOString(),
-    data: { message },
+function sendError(
+  ws: WebSocket,
+  correlationId: string,
+  code: string,
+  message: string,
+  retryable: boolean,
+): void {
+  sendEnvelope(ws, {
+    type: 'error',
+    correlationId,
+    error: { code, message, retryable },
   });
 }
 
-function closeQuietly(ws: WebSocket): void {
-  try {
-    ws.close();
-  } catch {
-    /* ignore */
-  }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
