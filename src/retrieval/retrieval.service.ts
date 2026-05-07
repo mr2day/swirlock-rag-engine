@@ -762,9 +762,21 @@ export class RetrievalService {
   }
 
   private isRoutineWeatherIntent(intent: string): boolean {
-    return /(weather|forecast|current[-_ ]?conditions|current[-_ ]?weather|meteo|vreme|prognoz|ploaie|rain|temperature|temperatur)/i.test(
-      intent,
-    );
+    return new Set([
+      'weather',
+      'weather_forecast',
+      'current_weather',
+      'current_weather_forecast',
+      'current_conditions',
+    ]).has(this.normalizeIntentLabel(intent));
+  }
+
+  private normalizeIntentLabel(intent: string): string {
+    return intent
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
   }
 
   private buildStructuredDocumentContent(
