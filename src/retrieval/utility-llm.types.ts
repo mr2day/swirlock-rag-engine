@@ -1,4 +1,4 @@
-import type { EvidenceChunk, ImageInputPart } from './retrieval.types';
+import type { ImageInputPart } from './retrieval.types';
 
 export interface UtilityLlmStatus {
   enabled: boolean;
@@ -57,34 +57,14 @@ export interface UtilityLlmExtractionSummariesInput {
   queryText: string;
   intent: string;
   documents: Array<{
-    title: string;
     url: string;
     excerpt: string;
     content: string;
-    publishedAt: string | null;
   }>;
 }
 
 export interface UtilityLlmExtractionSummaries {
   summariesByUrl: Map<string, string>;
-  warnings: string[];
-  diagnostics: UtilityLlmCallDiagnostics[];
-}
-
-export interface UtilityLlmEvidenceSynthesisInput {
-  correlationId: string;
-  queryText: string;
-  synthesisMode: 'brief' | 'detailed';
-  evidenceChunks: EvidenceChunk[];
-  caveats: string[];
-}
-
-export interface UtilityLlmEvidenceSynthesis {
-  synthesis: {
-    summary: string;
-    confidence: 'low' | 'medium' | 'high';
-    caveats: string[];
-  } | null;
   warnings: string[];
   diagnostics: UtilityLlmCallDiagnostics[];
 }

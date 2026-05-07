@@ -23,7 +23,6 @@ describe('RetrievalService', () => {
         freshness: 'low',
         allowedModes: ['local_rag', 'live_web'],
         maxEvidenceChunks: 4,
-        synthesisMode: 'brief',
         ...overrides,
       },
     };
@@ -97,11 +96,6 @@ describe('RetrievalService', () => {
       warnings: [],
       diagnostics: [],
     });
-    const shapeEvidenceSynthesis = jest.fn().mockResolvedValue({
-      synthesis: null,
-      warnings: [],
-      diagnostics: [],
-    });
     const searchService = {
       searchThenExtract,
     } as unknown as jest.Mocked<SearchService>;
@@ -119,7 +113,6 @@ describe('RetrievalService', () => {
       getStatus: utilityGetStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,
-      shapeEvidenceSynthesis,
     } as unknown as jest.Mocked<UtilityLlmService>;
     const embeddingService = {
       getConfiguration: embeddingGetConfiguration,
@@ -144,7 +137,6 @@ describe('RetrievalService', () => {
       utilityGetStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,
-      shapeEvidenceSynthesis,
       embeddingGetConfiguration,
       embeddingEmbed,
     };
@@ -237,9 +229,7 @@ describe('RetrievalService', () => {
       '6:local.search.completed',
       '7:retrieval.policy.decided',
       '8:evidence.chunk',
-      '9:utility_llm.evidence_synthesis.started',
-      '10:utility_llm.evidence_synthesis.completed',
-      '11:retrieval.completed',
+      '9:retrieval.completed',
     ]);
   });
 
@@ -640,7 +630,6 @@ describe('RetrievalService', () => {
       searchThenExtract,
       knowledgeSearch,
       summarizeExtractedDocuments,
-      shapeEvidenceSynthesis,
     } = makeHarness();
     const document: ExtractedDocument = {
       title: 'Bucharest current weather',
@@ -708,72 +697,10 @@ describe('RetrievalService', () => {
     );
 
     expect(summarizeExtractedDocuments).not.toHaveBeenCalled();
-    expect(shapeEvidenceSynthesis).not.toHaveBeenCalled();
     expect(result.evidenceChunks[0]?.content).toContain('condition: Sunny');
     expect(
       result.retrievalDiagnostics.utilityLlm?.usedForExtractionSummaries,
     ).toBe(false);
-    expect(
-      result.retrievalDiagnostics.utilityLlm?.usedForEvidenceSynthesis,
-    ).toBe(false);
-    expect(result.evidenceSynthesis?.confidence).toBe('medium');
-  });
-
-  it('uses Utility LLM evidence synthesis when available', async () => {
-    const { service, knowledgeSearch, shapeEvidenceSynthesis } = makeHarness();
-
-    knowledgeSearch.mockResolvedValue([
-      {
-        document: {
-          evidenceId: '0196f9e8-71b6-7dc0-8d2c-b0b3c4567890',
-          sourceTitle: 'RAG evaluation guide',
-          sourceUrl: 'https://example.com/rag-eval',
-          excerpt:
-            'RAG evaluation uses groundedness, faithfulness, and recall.',
-          content:
-            'RAG evaluation uses groundedness, faithfulness, and recall.',
-          providerSummary: null,
-          intent: 'general',
-          searchQueries: ['latest RAG evaluation methods'],
-          publishedAt: '2026-04-20T00:00:00.000Z',
-          firstRetrievedAt: '2026-04-21T00:00:00.000Z',
-          lastRetrievedAt: '2026-04-21T00:00:00.000Z',
-          lastSeenAt: '2026-04-21T00:00:00.000Z',
-          timesSeen: 1,
-          contentHash: 'hash',
-        },
-        relevanceScore: 0.82,
-        freshnessScore: 0.7,
-        score: 42,
-      },
-    ]);
-    shapeEvidenceSynthesis.mockResolvedValue({
-      synthesis: {
-        summary: 'Utility synthesis: groundedness and recall are key.',
-        confidence: 'high',
-        caveats: [],
-      },
-      warnings: [],
-      diagnostics: [
-        {
-          task: 'evidence_synthesis',
-          attempted: true,
-          succeeded: true,
-          durationMs: 16,
-          attempts: 1,
-        },
-      ],
-    });
-
-    const result = await service.retrieveEvidence(
-      makeRequest({ allowedModes: ['local_rag'] }),
-      'turn-1',
-    );
-
-    expect(result.evidenceSynthesis?.summary).toContain('Utility synthesis');
-    expect(
-      result.retrievalDiagnostics.utilityLlm?.usedForEvidenceSynthesis,
-    ).toBe(true);
   });
 
   it('returns live evidence when cache persistence fails', async () => {
@@ -868,7 +795,6 @@ describe('RetrievalService', () => {
     const result = await service.retrieveEvidence(makeRequest(), 'turn-1');
 
     expect(result.evidenceChunks).toEqual([]);
-    expect(result.evidenceSynthesis?.confidence).toBe('low');
     expect(result.retrievalDiagnostics.liveSearchError).toContain(
       'EXA_API_KEY',
     );

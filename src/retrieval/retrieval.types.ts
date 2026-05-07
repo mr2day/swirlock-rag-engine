@@ -6,7 +6,6 @@ export type RetrievalMode =
   | 'local_rag'
   | 'live_web'
   | 'local_and_live';
-export type SynthesisMode = 'none' | 'brief' | 'detailed';
 export type Modality = 'text' | 'image' | 'multimodal';
 export type EvidenceSourceType = 'web' | 'local_cache' | 'image_analysis';
 
@@ -57,7 +56,7 @@ export interface RetrieveEvidenceRequest {
     freshness: RetrievalFreshness;
     allowedModes?: RetrievalAllowedMode[];
     maxEvidenceChunks?: number;
-    synthesisMode?: SynthesisMode;
+    skipUtilitySummaries?: boolean;
   };
 }
 
@@ -83,12 +82,6 @@ export interface EvidenceChunk {
   retrievedAt: string;
 }
 
-export interface EvidenceSynthesis {
-  summary: string;
-  confidence: 'low' | 'medium' | 'high';
-  caveats: string[];
-}
-
 export interface RetrievalDiagnostics {
   liveSearchPerformed: boolean;
   localSearchPerformed: boolean;
@@ -103,7 +96,6 @@ export interface RetrievalDiagnostics {
     usedForQuery: boolean;
     usedForImages: boolean;
     usedForExtractionSummaries: boolean;
-    usedForEvidenceSynthesis: boolean;
     calls: Array<{
       task: string;
       attempted: boolean;
@@ -137,7 +129,6 @@ export interface RetrieveEvidenceData {
   normalizedQuery: NormalizedQuery;
   searchQueries: string[];
   evidenceChunks: EvidenceChunk[];
-  evidenceSynthesis?: EvidenceSynthesis;
   retrievalDiagnostics: RetrievalDiagnostics;
 }
 
@@ -158,8 +149,6 @@ export type RetrievalStreamEventType =
   | 'utility_llm.extraction_summaries.started'
   | 'utility_llm.extraction_summaries.completed'
   | 'evidence.chunk'
-  | 'utility_llm.evidence_synthesis.started'
-  | 'utility_llm.evidence_synthesis.completed'
   | 'retrieval.completed'
   | 'retrieval.failed';
 
@@ -177,7 +166,7 @@ export type RetrievalStreamEmitter = (
 export interface ValidatedRetrieveEvidenceRequest extends RetrieveEvidenceRequest {
   query: RetrieveEvidenceRequest['query'] & {
     maxEvidenceChunks: number;
-    synthesisMode: SynthesisMode;
+    skipUtilitySummaries: boolean;
     allowedModes: RetrievalAllowedMode[];
     hints: RetrievalHint[];
   };

@@ -45,11 +45,6 @@ describe('RetrievalController (e2e)', () => {
           warnings: [],
           diagnostics: [],
         }),
-        shapeEvidenceSynthesis: jest.fn().mockResolvedValue({
-          synthesis: null,
-          warnings: [],
-          diagnostics: [],
-        }),
       })
       .overrideProvider(EmbeddingServiceService)
       .useValue({
@@ -116,7 +111,6 @@ describe('RetrievalController (e2e)', () => {
           freshness: 'low',
           allowedModes: ['local_rag'],
           maxEvidenceChunks: 2,
-          synthesisMode: 'brief',
         },
       },
     });

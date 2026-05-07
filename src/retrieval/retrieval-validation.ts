@@ -8,7 +8,6 @@ import type {
   RetrievalAllowedMode,
   RetrievalFreshness,
   RetrievalHint,
-  SynthesisMode,
   TextInputPart,
   ValidatedRetrieveEvidenceRequest,
 } from './retrieval.types';
@@ -25,7 +24,6 @@ const FRESHNESS_VALUES: RetrievalFreshness[] = [
   'realtime',
 ];
 const ALLOWED_MODES: RetrievalAllowedMode[] = ['local_rag', 'live_web'];
-const SYNTHESIS_MODES: SynthesisMode[] = ['none', 'brief', 'detailed'];
 const HINT_KINDS: RetrievalHint['kind'][] = [
   'entity',
   'time_reference',
@@ -84,11 +82,10 @@ export function validateRetrieveEvidenceRequest(
     throw validationError('query.maxEvidenceChunks must be an integer >= 1.');
   }
 
-  const synthesisMode = expectOptionalEnum(
-    query.synthesisMode,
-    SYNTHESIS_MODES,
-    'query.synthesisMode',
-    'brief',
+  const skipUtilitySummaries = expectOptionalBoolean(
+    query.skipUtilitySummaries,
+    'query.skipUtilitySummaries',
+    false,
   );
   const hints = query.hints ? query.hints.map(validateRetrievalHint) : [];
 
@@ -104,7 +101,7 @@ export function validateRetrieveEvidenceRequest(
         requestedMaxEvidenceChunks,
         maxEvidenceChunks,
       ),
-      synthesisMode,
+      skipUtilitySummaries,
     },
   };
 }
@@ -242,17 +239,20 @@ function expectEnum<T extends string>(
   return value as T;
 }
 
-function expectOptionalEnum<T extends string>(
+function expectOptionalBoolean(
   value: unknown,
-  allowed: readonly T[],
   label: string,
-  fallback: T,
-): T {
+  fallback: boolean,
+): boolean {
   if (value === undefined || value === null) {
     return fallback;
   }
 
-  return expectEnum(value, allowed, label);
+  if (typeof value !== 'boolean') {
+    throw validationError(`${label} must be a boolean.`);
+  }
+
+  return value;
 }
 
 function isValidUrl(value: string): boolean {

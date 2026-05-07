@@ -21,7 +21,6 @@ import {
 import { UtilityLlmService } from './utility-llm.service';
 import type {
   EvidenceChunk,
-  EvidenceSynthesis,
   ImageInputPart,
   Modality,
   NormalizedQuery,
@@ -49,7 +48,6 @@ interface UtilityLlmRetrievalState {
   usedForQuery: boolean;
   usedForImages: boolean;
   usedForExtractionSummaries: boolean;
-  usedForEvidenceSynthesis: boolean;
   calls: UtilityLlmCallDiagnostics[];
 }
 
@@ -113,7 +111,7 @@ export class RetrievalService {
       freshness: request.query.freshness,
       allowedModes: request.query.allowedModes,
       maxEvidenceChunks: request.query.maxEvidenceChunks,
-      synthesisMode: request.query.synthesisMode,
+      skipUtilitySummaries: request.query.skipUtilitySummaries,
       partTypes: request.query.parts.map((part) => part.type),
     });
 
@@ -126,7 +124,6 @@ export class RetrievalService {
       usedForQuery: false,
       usedForImages: false,
       usedForExtractionSummaries: false,
-      usedForEvidenceSynthesis: false,
       calls: [],
     };
     const embeddingConfig = this.embeddingService.getConfiguration();
@@ -335,55 +332,6 @@ export class RetrievalService {
       freshness: request.query.freshness,
       reason: policyDecision.reason,
     };
-    const utilityEvidenceSynthesisMode =
-      request.query.synthesisMode === 'none'
-        ? null
-        : request.query.synthesisMode;
-    const shouldUseUtilityEvidenceSynthesis =
-      utilityEvidenceSynthesisMode !== null &&
-      !this.shouldSkipUtilityPostProcessing(
-        intent,
-        utilityEvidenceSynthesisMode,
-      );
-    if (shouldUseUtilityEvidenceSynthesis) {
-      await publish('utility_llm.evidence_synthesis.started', {
-        synthesisMode: request.query.synthesisMode,
-        evidenceChunkCount: evidenceChunks.length,
-      });
-    }
-    const utilitySynthesis = shouldUseUtilityEvidenceSynthesis
-      ? await this.utilityLlmService.shapeEvidenceSynthesis({
-          correlationId,
-          queryText: effectiveQuery,
-          synthesisMode: utilityEvidenceSynthesisMode,
-          evidenceChunks,
-          caveats,
-        })
-      : {
-          synthesis: null,
-          warnings: [],
-          diagnostics: [],
-        };
-
-    utilityState.usedForEvidenceSynthesis = Boolean(utilitySynthesis.synthesis);
-    utilityState.calls.push(...utilitySynthesis.diagnostics);
-    caveats.push(...utilitySynthesis.warnings);
-    if (shouldUseUtilityEvidenceSynthesis) {
-      await publish('utility_llm.evidence_synthesis.completed', {
-        succeeded: Boolean(utilitySynthesis.synthesis),
-        warningCount: utilitySynthesis.warnings.length,
-        diagnostics: utilitySynthesis.diagnostics,
-      });
-    }
-
-    const synthesis =
-      utilitySynthesis.synthesis ??
-      this.buildSynthesis(
-        request.query.synthesisMode,
-        evidenceChunks,
-        caveats,
-        policyDecision.mode,
-      );
 
     const retrievalDiagnostics = {
       liveSearchPerformed: policyDecision.useLive,
@@ -407,7 +355,6 @@ export class RetrievalService {
         utilitySupport.searchQueries,
       ),
       evidenceChunks,
-      ...(synthesis ? { evidenceSynthesis: synthesis } : {}),
       retrievalDiagnostics,
     };
 
@@ -521,9 +468,9 @@ export class RetrievalService {
     const documents = inspection.extract?.documents ?? [];
     const warnings: string[] = [];
     const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
-    const shouldUseExtractionSummaries = !this.shouldSkipUtilityPostProcessing(
+    const shouldUseExtractionSummaries = !this.shouldSkipExtractionSummaries(
       intent,
-      request.query.synthesisMode,
+      request.query.skipUtilitySummaries,
     );
     const extractionSummaries = shouldUseExtractionSummaries
       ? await this.summarizeLiveDocuments(
@@ -596,11 +543,9 @@ export class RetrievalService {
         queryText: effectiveQuery,
         intent,
         documents: documents.map((document) => ({
-          title: document.title,
           url: document.url,
           excerpt: document.excerpt,
           content: document.content,
-          publishedAt: document.publishedAt,
         })),
       });
 
@@ -754,11 +699,11 @@ export class RetrievalService {
     };
   }
 
-  private shouldSkipUtilityPostProcessing(
+  private shouldSkipExtractionSummaries(
     intent: string,
-    synthesisMode: 'none' | 'brief' | 'detailed',
+    skipUtilitySummaries: boolean,
   ): boolean {
-    return synthesisMode !== 'detailed' && this.isRoutineWeatherIntent(intent);
+    return skipUtilitySummaries || this.isRoutineWeatherIntent(intent);
   }
 
   private isRoutineWeatherIntent(intent: string): boolean {
@@ -941,72 +886,6 @@ export class RetrievalService {
     maxEvidenceChunks: number,
   ): EvidenceChunk[] {
     return chunks.slice(0, maxEvidenceChunks);
-  }
-
-  private buildSynthesis(
-    synthesisMode: 'none' | 'brief' | 'detailed',
-    evidenceChunks: EvidenceChunk[],
-    caveats: string[],
-    retrievalMode: RetrievalMode,
-  ): EvidenceSynthesis | null {
-    if (synthesisMode === 'none') {
-      return null;
-    }
-
-    if (evidenceChunks.length === 0) {
-      return {
-        summary: 'No evidence chunks were found for this retrieval request.',
-        confidence: 'low',
-        caveats: caveats.length > 0 ? caveats : ['No usable evidence found.'],
-      };
-    }
-
-    const topSources = evidenceChunks
-      .slice(0, synthesisMode === 'detailed' ? 4 : 2)
-      .map((chunk) => `${chunk.sourceTitle}: ${chunk.content}`)
-      .join(' ');
-    const summary =
-      synthesisMode === 'detailed'
-        ? this.limitEvidenceContent(topSources, 1800)
-        : this.limitEvidenceContent(
-            `Top retrieval evidence came from ${evidenceChunks
-              .slice(0, 2)
-              .map((chunk) => chunk.sourceTitle)
-              .join(' and ')}.`,
-            700,
-          );
-
-    return {
-      summary,
-      confidence: this.estimateConfidence(evidenceChunks, retrievalMode),
-      caveats,
-    };
-  }
-
-  private estimateConfidence(
-    evidenceChunks: EvidenceChunk[],
-    retrievalMode: RetrievalMode,
-  ): EvidenceSynthesis['confidence'] {
-    const webEvidenceCount = evidenceChunks.filter(
-      (chunk) => chunk.sourceType === 'web',
-    ).length;
-    const averageRelevance =
-      evidenceChunks.reduce((total, chunk) => total + chunk.relevanceScore, 0) /
-      evidenceChunks.length;
-
-    if (
-      evidenceChunks.length >= 3 &&
-      averageRelevance >= 0.65 &&
-      (webEvidenceCount > 0 || retrievalMode === 'local_rag')
-    ) {
-      return 'high';
-    }
-
-    if (evidenceChunks.length >= 1 && averageRelevance >= 0.35) {
-      return 'medium';
-    }
-
-    return 'low';
   }
 
   private normalizeOptionalTimestamp(

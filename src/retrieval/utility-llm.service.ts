@@ -4,8 +4,6 @@ import { serviceRuntimeConfig } from '../config/service-config';
 import type { ImageInputPart } from './retrieval.types';
 import type {
   UtilityLlmCallDiagnostics,
-  UtilityLlmEvidenceSynthesis,
-  UtilityLlmEvidenceSynthesisInput,
   UtilityLlmExtractionSummaries,
   UtilityLlmExtractionSummariesInput,
   UtilityLlmRetrievalSupport,
@@ -234,16 +232,21 @@ export class UtilityLlmService {
       };
     }
 
+    const documents = input.documents.slice(0, 6);
     const result = await this.safeInferJson(
       {
         correlationId: input.correlationId,
         task: 'extraction_summaries',
-        prompt: this.buildExtractionSummariesPrompt(input),
-        responseFormat: 'json',
+        prompt: this.buildExtractionSummariesPrompt(
+          input.queryText,
+          input.intent,
+          documents,
+        ),
+        responseFormat: 'text',
         temperature: 0,
         priority: this.priorityForTask('background'),
       },
-      (value) => this.normalizeExtractionSummariesJson(value),
+      (value) => this.normalizeExtractionSummariesJson(value, documents),
     );
 
     if (!result.value) {
@@ -256,51 +259,6 @@ export class UtilityLlmService {
 
     return {
       summariesByUrl: result.value,
-      warnings: [],
-      diagnostics: [result.diagnostics],
-    };
-  }
-
-  async shapeEvidenceSynthesis(
-    input: UtilityLlmEvidenceSynthesisInput,
-  ): Promise<UtilityLlmEvidenceSynthesis> {
-    if (!this.enabled || input.evidenceChunks.length === 0) {
-      return {
-        synthesis: null,
-        warnings: [],
-        diagnostics: [
-          this.skippedDiagnostic(
-            'evidence_synthesis',
-            this.enabled
-              ? 'No evidence chunks were available.'
-              : 'Utility LLM Host support is disabled.',
-          ),
-        ],
-      };
-    }
-
-    const result = await this.safeInferJson(
-      {
-        correlationId: input.correlationId,
-        task: 'evidence_synthesis',
-        prompt: this.buildEvidenceSynthesisPrompt(input),
-        responseFormat: 'json',
-        temperature: 0.1,
-        priority: this.priorityForTask('background'),
-      },
-      (value) => this.normalizeEvidenceSynthesisJson(value),
-    );
-
-    if (!result.value) {
-      return {
-        synthesis: null,
-        warnings: [result.warning],
-        diagnostics: [result.diagnostics],
-      };
-    }
-
-    return {
-      synthesis: result.value,
       warnings: [],
       diagnostics: [result.diagnostics],
     };
@@ -680,57 +638,25 @@ export class UtilityLlmService {
   }
 
   private buildExtractionSummariesPrompt(
-    input: UtilityLlmExtractionSummariesInput,
+    queryText: string,
+    intent: string,
+    documents: Array<{ excerpt: string; content: string }>,
   ): string {
-    return [
-      'You are summarizing extracted web documents for a retrieval cache.',
-      'Return JSON only. Keep summaries factual and source-grounded.',
+    const lines: string[] = [
+      'Summarize each document below. Keep summaries factual and grounded only in the document text.',
+      'Output JSON only, no prose, no code fences:',
+      '{"summaries":[{"index":<document number>,"summary":"<summary text>"}]}',
       '',
-      'Schema:',
-      '{"summaries": [{"url": string, "summary": string}]}',
+      `Retrieval query: ${queryText}`,
+      `Intent: ${intent}`,
       '',
-      `Retrieval query: ${input.queryText}`,
-      `Intent: ${input.intent}`,
-      '',
-      'Documents:',
-      JSON.stringify(
-        input.documents.slice(0, 6).map((document) => ({
-          title: document.title,
-          url: document.url,
-          publishedAt: document.publishedAt,
-          excerpt: limitText(document.excerpt || document.content, 1200),
-        })),
-      ),
-    ].join('\n');
-  }
-
-  private buildEvidenceSynthesisPrompt(
-    input: UtilityLlmEvidenceSynthesisInput,
-  ): string {
-    return [
-      'You are shaping retrieval evidence for downstream context assembly.',
-      'Return JSON only. Do not produce a final user answer.',
-      '',
-      'Schema:',
-      '{"summary": string, "confidence": "low"|"medium"|"high", "caveats": string[]}',
-      '',
-      `Synthesis mode: ${input.synthesisMode}`,
-      `Retrieval query: ${input.queryText}`,
-      `Existing caveats: ${JSON.stringify(input.caveats)}`,
-      '',
-      'Evidence chunks:',
-      JSON.stringify(
-        input.evidenceChunks.slice(0, 8).map((chunk) => ({
-          sourceType: chunk.sourceType,
-          sourceTitle: chunk.sourceTitle,
-          sourceUrl: chunk.sourceUrl,
-          relevanceScore: chunk.relevanceScore,
-          freshnessScore: chunk.freshnessScore,
-          publishedAt: chunk.publishedAt,
-          content: limitText(chunk.content, 1000),
-        })),
-      ),
-    ].join('\n');
+    ];
+    documents.forEach((document, position) => {
+      lines.push(`Document ${position + 1}:`);
+      lines.push(limitText(document.excerpt || document.content, 700));
+      lines.push('');
+    });
+    return lines.join('\n');
   }
 
   private normalizeRetrievalSupportJson(value: unknown): {
@@ -759,6 +685,7 @@ export class UtilityLlmService {
 
   private normalizeExtractionSummariesJson(
     value: unknown,
+    documents: Array<{ url: string }>,
   ): Map<string, string> | null {
     if (!isRecord(value) || !Array.isArray(value.summaries)) {
       return null;
@@ -771,41 +698,23 @@ export class UtilityLlmService {
         continue;
       }
 
-      const url = normalizeOptionalString(item.url, 1000);
+      const indexValue =
+        typeof item.index === 'number'
+          ? item.index
+          : Number.parseInt(String(item.index), 10);
+      if (!Number.isInteger(indexValue)) {
+        continue;
+      }
+
+      const document = documents[indexValue - 1];
       const summary = normalizeOptionalString(item.summary, 1200);
 
-      if (url && summary) {
-        summariesByUrl.set(url, summary);
+      if (document && summary) {
+        summariesByUrl.set(document.url, summary);
       }
     }
 
     return summariesByUrl;
-  }
-
-  private normalizeEvidenceSynthesisJson(
-    value: unknown,
-  ): UtilityLlmEvidenceSynthesis['synthesis'] {
-    if (!isRecord(value)) {
-      return null;
-    }
-
-    const summary = normalizeOptionalString(value.summary, 1800);
-    const confidence =
-      value.confidence === 'high' ||
-      value.confidence === 'medium' ||
-      value.confidence === 'low'
-        ? value.confidence
-        : 'medium';
-
-    if (!summary) {
-      return null;
-    }
-
-    return {
-      summary,
-      confidence,
-      caveats: normalizeStringArray(value.caveats, 6, 500),
-    };
   }
 
   private priorityForTask(kind: 'interactive' | 'background'): number {
