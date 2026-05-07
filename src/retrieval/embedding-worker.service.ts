@@ -10,6 +10,8 @@ import { EmbeddingServiceService } from './embedding-service.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
 
 const WORKER_CORRELATION_PREFIX = 'embedding-worker';
+const MAX_EMBEDDING_TEXT_WORDS = 320;
+const MAX_EMBEDDING_TEXT_CHARS = 1400;
 
 @Injectable()
 export class EmbeddingWorkerService implements OnModuleInit, OnModuleDestroy {
@@ -103,7 +105,9 @@ export class EmbeddingWorkerService implements OnModuleInit, OnModuleDestroy {
       return { processed: 0, failed: 0 };
     }
 
-    const texts = claims.map((claim) => claim.content);
+    const texts = claims.map((claim) =>
+      this.prepareEmbeddingText(claim.content),
+    );
     const { result, diagnostics } = await this.embeddingService.embed(
       correlationId,
       texts,
@@ -178,6 +182,20 @@ export class EmbeddingWorkerService implements OnModuleInit, OnModuleDestroy {
     const exponent = Math.max(0, attempts - 1);
     const candidate = this.initialBackoffMs * Math.pow(2, exponent);
     return Math.min(this.maxBackoffMs, candidate);
+  }
+
+  private prepareEmbeddingText(value: string): string {
+    const normalized = value.replace(/\s+/g, ' ').trim();
+    const wordLimited = normalized
+      .split(' ')
+      .slice(0, MAX_EMBEDDING_TEXT_WORDS)
+      .join(' ');
+
+    if (wordLimited.length <= MAX_EMBEDDING_TEXT_CHARS) {
+      return wordLimited;
+    }
+
+    return `${wordLimited.slice(0, MAX_EMBEDDING_TEXT_CHARS - 3).trimEnd()}...`;
   }
 
   private get workerEnabled(): boolean {

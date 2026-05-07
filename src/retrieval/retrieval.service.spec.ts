@@ -634,6 +634,91 @@ describe('RetrievalService', () => {
     ).toBe(true);
   });
 
+  it('skips Utility LLM post-processing for routine weather retrieval', async () => {
+    const {
+      service,
+      searchThenExtract,
+      knowledgeSearch,
+      summarizeExtractedDocuments,
+      shapeEvidenceSynthesis,
+    } = makeHarness();
+    const document: ExtractedDocument = {
+      title: 'Bucharest current weather',
+      url: 'https://example.com/bucharest-weather',
+      publishedAt: '2026-05-07T09:00:00.000Z',
+      score: 0.92,
+      content:
+        'Bucharest weather: sunny now, chance of showers later in the evening.',
+      contentLength: 70,
+      excerpt: 'Sunny now with a chance of showers later.',
+      providerSummary: null,
+      structuredSummary: null,
+      weatherSnapshot: {
+        location: 'Bucharest',
+        observationTime: '2026-05-07T09:00:00.000Z',
+        condition: 'Sunny',
+        temperature: '24 C',
+        feelsLike: '25 C',
+        humidity: '45%',
+        wind: '10 km/h',
+        high: '26 C',
+        low: '14 C',
+      },
+    };
+
+    knowledgeSearch.mockResolvedValue([]);
+    searchThenExtract.mockResolvedValue({
+      query: 'weather forecast Bucharest this evening rain',
+      effectiveQuery: 'weather forecast Bucharest this evening rain',
+      appliedLocationFallback: null,
+      notes: [],
+      searchLimit: 5,
+      extractLimit: 3,
+      totalLatencyMs: 12,
+      completedAt: '2026-05-07T09:00:00.000Z',
+      status: 'ok',
+      error: null,
+      search: null,
+      extract: {
+        latencyMs: 7,
+        requestId: 'exa-extract',
+        providerReportedLatencyMs: null,
+        usageCredits: null,
+        costDollarsTotal: null,
+        documentCount: 1,
+        totalCharacters: 70,
+        failedSources: [],
+        documents: [document],
+      },
+    });
+
+    const result = await service.retrieveEvidence(
+      makeRequest({
+        parts: [
+          {
+            type: 'text',
+            text: 'dar in bucuresti cum va fi vremea diseara?',
+          },
+        ],
+        resolvedQueryText: 'weather forecast Bucharest this evening rain',
+        intent: 'weather_forecast',
+        freshness: 'high',
+      }),
+      'turn-weather',
+    );
+
+    expect(summarizeExtractedDocuments).not.toHaveBeenCalled();
+    expect(shapeEvidenceSynthesis).not.toHaveBeenCalled();
+    expect(result.evidenceChunks[0]?.content).toContain('condition: Sunny');
+    expect(
+      result.retrievalDiagnostics.utilityLlm?.usedForExtractionSummaries,
+    ).toBe(false);
+    expect(
+      result.retrievalDiagnostics.utilityLlm?.usedForEvidenceSynthesis,
+    ).toBe(false);
+    expect(result.evidenceSynthesis?.confidence).toBe('medium');
+  });
+
   it('uses Utility LLM evidence synthesis when available', async () => {
     const { service, knowledgeSearch, shapeEvidenceSynthesis } = makeHarness();
 

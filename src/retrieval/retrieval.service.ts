@@ -335,31 +335,40 @@ export class RetrievalService {
       freshness: request.query.freshness,
       reason: policyDecision.reason,
     };
-    if (request.query.synthesisMode !== 'none') {
+    const utilityEvidenceSynthesisMode =
+      request.query.synthesisMode === 'none'
+        ? null
+        : request.query.synthesisMode;
+    const shouldUseUtilityEvidenceSynthesis =
+      utilityEvidenceSynthesisMode !== null &&
+      !this.shouldSkipUtilityPostProcessing(
+        intent,
+        utilityEvidenceSynthesisMode,
+      );
+    if (shouldUseUtilityEvidenceSynthesis) {
       await publish('utility_llm.evidence_synthesis.started', {
         synthesisMode: request.query.synthesisMode,
         evidenceChunkCount: evidenceChunks.length,
       });
     }
-    const utilitySynthesis =
-      request.query.synthesisMode !== 'none'
-        ? await this.utilityLlmService.shapeEvidenceSynthesis({
-            correlationId,
-            queryText: effectiveQuery,
-            synthesisMode: request.query.synthesisMode,
-            evidenceChunks,
-            caveats,
-          })
-        : {
-            synthesis: null,
-            warnings: [],
-            diagnostics: [],
-          };
+    const utilitySynthesis = shouldUseUtilityEvidenceSynthesis
+      ? await this.utilityLlmService.shapeEvidenceSynthesis({
+          correlationId,
+          queryText: effectiveQuery,
+          synthesisMode: utilityEvidenceSynthesisMode,
+          evidenceChunks,
+          caveats,
+        })
+      : {
+          synthesis: null,
+          warnings: [],
+          diagnostics: [],
+        };
 
     utilityState.usedForEvidenceSynthesis = Boolean(utilitySynthesis.synthesis);
     utilityState.calls.push(...utilitySynthesis.diagnostics);
     caveats.push(...utilitySynthesis.warnings);
-    if (request.query.synthesisMode !== 'none') {
+    if (shouldUseUtilityEvidenceSynthesis) {
       await publish('utility_llm.evidence_synthesis.completed', {
         succeeded: Boolean(utilitySynthesis.synthesis),
         warningCount: utilitySynthesis.warnings.length,
@@ -512,30 +521,26 @@ export class RetrievalService {
     const documents = inspection.extract?.documents ?? [];
     const warnings: string[] = [];
     const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
-    await publish('utility_llm.extraction_summaries.started', {
-      documentCount: documents.length,
-    });
-    const extractionSummaries =
-      await this.utilityLlmService.summarizeExtractedDocuments({
-        correlationId,
-        queryText: effectiveQuery,
-        intent,
-        documents: documents.map((document) => ({
-          title: document.title,
-          url: document.url,
-          excerpt: document.excerpt,
-          content: document.content,
-          publishedAt: document.publishedAt,
-        })),
-      });
+    const shouldUseExtractionSummaries = !this.shouldSkipUtilityPostProcessing(
+      intent,
+      request.query.synthesisMode,
+    );
+    const extractionSummaries = shouldUseExtractionSummaries
+      ? await this.summarizeLiveDocuments(
+          documents,
+          effectiveQuery,
+          intent,
+          correlationId,
+          publish,
+        )
+      : {
+          summariesByUrl: new Map<string, string>(),
+          warnings: [],
+          diagnostics: [],
+        };
 
     warnings.push(...extractionSummaries.warnings);
     utilityDiagnostics.push(...extractionSummaries.diagnostics);
-    await publish('utility_llm.extraction_summaries.completed', {
-      summaryCount: extractionSummaries.summariesByUrl.size,
-      warningCount: extractionSummaries.warnings.length,
-      diagnostics: extractionSummaries.diagnostics,
-    });
 
     try {
       await this.knowledgeStore.upsertExtractedDocuments(
@@ -573,6 +578,39 @@ export class RetrievalService {
       utilityDiagnostics,
       usedExtractionSummaries: extractionSummaries.summariesByUrl.size > 0,
     };
+  }
+
+  private async summarizeLiveDocuments(
+    documents: ExtractedDocument[],
+    effectiveQuery: string,
+    intent: string,
+    correlationId: string,
+    publish: RetrievalProgressPublisher,
+  ) {
+    await publish('utility_llm.extraction_summaries.started', {
+      documentCount: documents.length,
+    });
+    const extractionSummaries =
+      await this.utilityLlmService.summarizeExtractedDocuments({
+        correlationId,
+        queryText: effectiveQuery,
+        intent,
+        documents: documents.map((document) => ({
+          title: document.title,
+          url: document.url,
+          excerpt: document.excerpt,
+          content: document.content,
+          publishedAt: document.publishedAt,
+        })),
+      });
+
+    await publish('utility_llm.extraction_summaries.completed', {
+      summaryCount: extractionSummaries.summariesByUrl.size,
+      warningCount: extractionSummaries.warnings.length,
+      diagnostics: extractionSummaries.diagnostics,
+    });
+
+    return extractionSummaries;
   }
 
   private mapLocalResultToEvidence(result: {
@@ -701,7 +739,10 @@ export class RetrievalService {
       sourceTitle: document.title || document.url,
       sourceUrl: document.url,
       content: this.limitEvidenceContent(
-        utilitySummary || document.excerpt || document.content,
+        utilitySummary ||
+          this.buildStructuredDocumentContent(document) ||
+          document.excerpt ||
+          document.content,
       ),
       relevanceScore: this.roundScore(document.score ?? fallbackScore),
       freshnessScore: this.scoreFreshness(
@@ -711,6 +752,55 @@ export class RetrievalService {
       ...(publishedAt ? { publishedAt } : {}),
       retrievedAt,
     };
+  }
+
+  private shouldSkipUtilityPostProcessing(
+    intent: string,
+    synthesisMode: 'none' | 'brief' | 'detailed',
+  ): boolean {
+    return synthesisMode !== 'detailed' && this.isRoutineWeatherIntent(intent);
+  }
+
+  private isRoutineWeatherIntent(intent: string): boolean {
+    return /(weather|forecast|current[-_ ]?conditions|current[-_ ]?weather|meteo|vreme|prognoz|ploaie|rain|temperature|temperatur)/i.test(
+      intent,
+    );
+  }
+
+  private buildStructuredDocumentContent(
+    document: ExtractedDocument,
+  ): string | null {
+    if (document.weatherSnapshot) {
+      const snapshot = document.weatherSnapshot;
+      const fields = [
+        ['location', snapshot.location],
+        ['observed', snapshot.observationTime],
+        ['condition', snapshot.condition],
+        ['temperature', snapshot.temperature],
+        ['feels like', snapshot.feelsLike],
+        ['humidity', snapshot.humidity],
+        ['wind', snapshot.wind],
+        ['high', snapshot.high],
+        ['low', snapshot.low],
+      ]
+        .filter((entry): entry is [string, string] => Boolean(entry[1]))
+        .map(([label, value]) => `${label}: ${value}`);
+
+      if (fields.length > 0) {
+        return fields.join('; ');
+      }
+    }
+
+    if (document.structuredSummary) {
+      const fields = document.structuredSummary.fields
+        .map((field) => `${field.label}: ${field.value}`)
+        .join('; ');
+      return [document.structuredSummary.heading, fields]
+        .filter(Boolean)
+        .join('; ');
+    }
+
+    return document.providerSummary;
   }
 
   private buildImageReferenceEvidence(
