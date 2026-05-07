@@ -31,6 +31,8 @@ const SEARCH_CONTENT_WINDOW = 5000;
 const DATABASE_STATEMENT_TIMEOUT_MS = 15000;
 const POSTGRES_CANDIDATE_MULTIPLIER = 5;
 const POSTGRES_MIN_CANDIDATES = 25;
+const MIN_LOCAL_TEXT_RELEVANCE = 0.12;
+const MIN_VECTOR_ONLY_RELEVANCE = 0.5;
 const EMBEDDING_JOB_STALE_AFTER_MS = 15 * 60 * 1000;
 
 export type KnowledgeStoreKind = 'postgresql' | 'json_file';
@@ -397,25 +399,27 @@ LIMIT $3
       ],
     );
 
-    const scoredResults = result.rows.map((row) => {
-      const document = this.mapChunkRowToDocument(row);
-      const freshnessScore = this.scoreFreshness(document, freshness);
-      const relevanceScore = this.scorePostgresRelevance(row);
-      const sourceQualityScore = this.toNumber(row.source_quality_score);
-      const score = this.scoreHybridCandidate({
-        relevanceScore,
-        freshnessScore,
-        sourceQualityScore,
-        freshness,
-      });
+    const scoredResults = result.rows
+      .map((row) => {
+        const document = this.mapChunkRowToDocument(row);
+        const freshnessScore = this.scoreFreshness(document, freshness);
+        const relevanceScore = this.scorePostgresRelevance(row);
+        const sourceQualityScore = this.toNumber(row.source_quality_score);
+        const score = this.scoreHybridCandidate({
+          relevanceScore,
+          freshnessScore,
+          sourceQualityScore,
+          freshness,
+        });
 
-      return {
-        document,
-        relevanceScore,
-        freshnessScore,
-        score,
-      };
-    });
+        return {
+          document,
+          relevanceScore,
+          freshnessScore,
+          score,
+        };
+      })
+      .filter((result) => result.relevanceScore >= MIN_LOCAL_TEXT_RELEVANCE);
 
     return selectDiverseResults(
       scoredResults,
@@ -1001,25 +1005,27 @@ LIMIT $2
       [literal, candidateLimit, queryEmbedding.length],
     );
 
-    const scored = result.rows.map((row) => {
-      const document = this.mapChunkRowToDocument(row);
-      const similarity = clampUnit(this.toNumber(row.vector_similarity));
-      const freshnessScore = this.scoreFreshness(document, freshness);
-      const sourceQualityScore = this.toNumber(row.source_quality_score);
-      const score = this.scoreHybridCandidate({
-        relevanceScore: similarity,
-        freshnessScore,
-        sourceQualityScore,
-        freshness,
-      });
+    const scored = result.rows
+      .map((row) => {
+        const document = this.mapChunkRowToDocument(row);
+        const similarity = clampUnit(this.toNumber(row.vector_similarity));
+        const freshnessScore = this.scoreFreshness(document, freshness);
+        const sourceQualityScore = this.toNumber(row.source_quality_score);
+        const score = this.scoreHybridCandidate({
+          relevanceScore: similarity,
+          freshnessScore,
+          sourceQualityScore,
+          freshness,
+        });
 
-      return {
-        document,
-        relevanceScore: similarity,
-        freshnessScore,
-        score,
-      };
-    });
+        return {
+          document,
+          relevanceScore: similarity,
+          freshnessScore,
+          score,
+        };
+      })
+      .filter((result) => result.relevanceScore >= MIN_VECTOR_ONLY_RELEVANCE);
 
     return selectDiverseResults(
       scored,
@@ -1052,11 +1058,11 @@ LIMIT $2
     }
 
     if (vector.length === 0) {
-      return lexical.slice(0, maxResults);
+      return this.filterWeakTextResults(lexical).slice(0, maxResults);
     }
 
     if (lexical.length === 0) {
-      return vector.slice(0, maxResults);
+      return this.filterWeakVectorOnlyResults(vector).slice(0, maxResults);
     }
 
     const fused = new Map<string, KnowledgeStoreSearchResult>();
@@ -1082,6 +1088,15 @@ LIMIT $2
     for (const [evidenceId, entry] of fused) {
       const lexicalRank = lexicalIndex.get(evidenceId);
       const vectorRank = vectorIndex.get(evidenceId);
+      if (
+        typeof lexicalRank !== 'number' &&
+        entry.relevanceScore < MIN_VECTOR_ONLY_RELEVANCE
+      ) {
+        continue;
+      }
+      if (entry.relevanceScore < MIN_LOCAL_TEXT_RELEVANCE) {
+        continue;
+      }
       const lexicalContribution =
         typeof lexicalRank === 'number' ? 1 / (FUSE_K + lexicalRank) : 0;
       const vectorContribution =
@@ -1107,6 +1122,22 @@ LIMIT $2
         entry.document.sourceDomain ??
         getSourceDomain(entry.document.sourceUrl),
       (entry) => entry.score,
+    );
+  }
+
+  private filterWeakVectorOnlyResults(
+    results: KnowledgeStoreSearchResult[],
+  ): KnowledgeStoreSearchResult[] {
+    return results.filter(
+      (result) => result.relevanceScore >= MIN_VECTOR_ONLY_RELEVANCE,
+    );
+  }
+
+  private filterWeakTextResults(
+    results: KnowledgeStoreSearchResult[],
+  ): KnowledgeStoreSearchResult[] {
+    return results.filter(
+      (result) => result.relevanceScore >= MIN_LOCAL_TEXT_RELEVANCE,
     );
   }
 
@@ -1312,6 +1343,7 @@ LIMIT 1
         this.scoreDocument(document, normalizedQuery, queryTerms, freshness),
       )
       .filter((result): result is KnowledgeStoreSearchResult => Boolean(result))
+      .filter((result) => result.relevanceScore >= MIN_LOCAL_TEXT_RELEVANCE)
       .sort((left, right) => {
         if (right.score !== left.score) {
           return right.score - left.score;

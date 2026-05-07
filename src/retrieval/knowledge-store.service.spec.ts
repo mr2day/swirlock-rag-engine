@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ConfigService } from '@nestjs/config';
 import { KnowledgeStoreService } from './knowledge-store.service';
+import type { KnowledgeStoreSearchResult } from './knowledge-store.service';
 import type { ExtractedDocument } from '../search/search.types';
 
 describe('KnowledgeStoreService', () => {
@@ -18,6 +19,38 @@ describe('KnowledgeStoreService', () => {
     return {
       service: new KnowledgeStoreService(configService),
       storePath,
+    };
+  }
+
+  function makeSearchResult(input: {
+    title: string;
+    url: string;
+    relevanceScore: number;
+    freshnessScore?: number;
+    score?: number;
+  }): KnowledgeStoreSearchResult {
+    const retrievedAt = '2026-05-08T00:00:00.000Z';
+    return {
+      document: {
+        evidenceId: input.url,
+        sourceTitle: input.title,
+        sourceUrl: input.url,
+        sourceDomain: new URL(input.url).hostname,
+        content: input.title,
+        excerpt: input.title,
+        providerSummary: null,
+        intent: 'test',
+        searchQueries: [],
+        publishedAt: null,
+        firstRetrievedAt: retrievedAt,
+        lastRetrievedAt: retrievedAt,
+        lastSeenAt: retrievedAt,
+        timesSeen: 1,
+        contentHash: input.url,
+      },
+      relevanceScore: input.relevanceScore,
+      freshnessScore: input.freshnessScore ?? 0.9,
+      score: input.score ?? input.relevanceScore,
     };
   }
 
@@ -79,6 +112,60 @@ describe('KnowledgeStoreService', () => {
     await expect(service.search('vector retrieval', 'low', 3)).resolves.toEqual(
       [],
     );
+  });
+
+  it('drops weak vector-only hits during hybrid search', async () => {
+    const { service } = await makeService();
+    jest.spyOn(service, 'search').mockResolvedValue([
+      makeSearchResult({
+        title: 'Aspasia - Livius',
+        url: 'https://livius.org/articles/person/aspasia/',
+        relevanceScore: 0.18,
+        score: 0.56,
+      }),
+    ]);
+    jest.spyOn(service, 'searchByEmbedding').mockResolvedValue([
+      makeSearchResult({
+        title: 'New York City, NY Hourly Weather Forecast',
+        url: 'https://www.wunderground.com/hourly/us/ny/new-york-city',
+        relevanceScore: 0.42,
+        freshnessScore: 0.99,
+        score: 0.72,
+      }),
+    ]);
+
+    const results = await service.searchHybrid(
+      'Aspasia of Miletus wife of Pericles historical facts',
+      [0.1, 0.2, 0.3],
+      'medium',
+      10,
+    );
+
+    expect(results.map((result) => result.document.sourceTitle)).toEqual([
+      'Aspasia - Livius',
+    ]);
+  });
+
+  it('drops weak lexical-only hits during hybrid search', async () => {
+    const { service } = await makeService();
+    jest.spyOn(service, 'search').mockResolvedValue([
+      makeSearchResult({
+        title: 'Finding all children for multiple parents in single SQL query',
+        url: 'https://stackoverflow.com/questions/8204770/finding-all-children-for-multiple-parents-in-single-sql-query',
+        relevanceScore: 0.1,
+        score: 0.56,
+      }),
+    ]);
+    jest.spyOn(service, 'searchByEmbedding').mockResolvedValue([]);
+
+    const results = await service.searchHybrid(
+      'Aspasia of Miletus wife of Pericles historical facts',
+      [0.1, 0.2, 0.3],
+      'medium',
+      10,
+    );
+
+    expect(results).toEqual([]);
   });
 
   it('upserts by source URL instead of duplicating repeated live results', async () => {
