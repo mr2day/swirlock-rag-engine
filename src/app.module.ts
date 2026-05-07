@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { loadServiceEnv } from './config/service-config';
+import { DevModule } from './dev/dev.module';
 import { RetrievalModule } from './retrieval/retrieval.module';
 import { SearchModule } from './search/search.module';
 
@@ -14,6 +15,7 @@ import { SearchModule } from './search/search.module';
     }),
     RetrievalModule,
     SearchModule,
+    DevModule,
   ],
 })
 export class AppModule {}
