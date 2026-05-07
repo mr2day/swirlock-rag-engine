@@ -41,6 +41,13 @@ export interface RetrievalHint {
   text: string;
 }
 
+export interface UserLocation {
+  latitude: number;
+  longitude: number;
+  accuracyMeters?: number;
+  capturedAt?: string;
+}
+
 export interface RetrieveEvidenceRequest {
   requestContext: RequestContext;
   session?: {
@@ -57,6 +64,7 @@ export interface RetrieveEvidenceRequest {
     allowedModes?: RetrievalAllowedMode[];
     maxEvidenceChunks?: number;
     skipUtilitySummaries?: boolean;
+    userLocation?: UserLocation;
   };
 }
 

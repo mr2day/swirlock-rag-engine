@@ -9,12 +9,6 @@ import { ConfigService } from '@nestjs/config';
 import Exa, { type SearchResponse } from 'exa-js';
 import { ContentExcerptService } from './content-excerpt.service';
 import { cleanContent } from './content-cleaner';
-import { rankSearchResults } from './search-result-ranker';
-import {
-  resolveSearchQuery,
-  type SearchIntent,
-  type SearchQueryResolution,
-} from './search-query-resolver';
 import type {
   ExtractStageResult,
   ExtractedDocument,
@@ -24,8 +18,6 @@ import type {
   SearchExtractInspectionResult,
   SearchExtractProgressHandler,
   SearchStageResult,
-  StructuredSummary,
-  WeatherSnapshot,
 } from './search.types';
 
 type ExaHighlightsSearchResponse = SearchResponse<{
@@ -37,68 +29,12 @@ type ExaHighlightsSearchResponse = SearchResponse<{
 type ExaExtractSearchResponse = SearchResponse<{
   text: {
     maxCharacters: number;
-    verbosity?: 'compact' | 'standard' | 'full';
-    excludeSections?: Array<
-      'navigation' | 'footer' | 'sidebar' | 'metadata' | 'banner'
-    >;
   };
   highlights: {
     query?: string;
     maxCharacters: number;
   };
-  summary: {
-    query?: string;
-    schema?: Record<string, unknown>;
-  };
 }>;
-
-const EXA_CURRENT_WEATHER_SUMMARY_SCHEMA = {
-  type: 'object',
-  properties: {
-    location: { type: 'string' },
-    observationTime: { type: 'string' },
-    condition: { type: 'string' },
-    temperature: { type: 'string' },
-    feelsLike: { type: 'string' },
-    humidity: { type: 'string' },
-    wind: { type: 'string' },
-    high: { type: 'string' },
-    low: { type: 'string' },
-  },
-  required: ['temperature'],
-} satisfies Record<string, unknown>;
-
-const EXA_MARKET_PRICE_SUMMARY_SCHEMA = {
-  type: 'object',
-  properties: {
-    asset: { type: 'string' },
-    quoteTime: { type: 'string' },
-    marketStatus: { type: 'string' },
-    price: { type: 'string' },
-    currency: { type: 'string' },
-    change: { type: 'string' },
-    percentChange: { type: 'string' },
-    exchange: { type: 'string' },
-    dayRange: { type: 'string' },
-  },
-  required: ['price'],
-} satisfies Record<string, unknown>;
-
-const EXA_SPORTS_SCORE_SUMMARY_SCHEMA = {
-  type: 'object',
-  properties: {
-    event: { type: 'string' },
-    competition: { type: 'string' },
-    status: { type: 'string' },
-    score: { type: 'string' },
-    teamA: { type: 'string' },
-    teamB: { type: 'string' },
-    winner: { type: 'string' },
-    period: { type: 'string' },
-    eventTime: { type: 'string' },
-  },
-  required: ['status'],
-} satisfies Record<string, unknown>;
 
 @Injectable()
 export class SearchService {
@@ -113,32 +49,21 @@ export class SearchService {
 
   async search(query: string): Promise<SearchExecutionResult> {
     const normalizedQuery = this.normalizeQuery(query);
-    const queryResolution = resolveSearchQuery(normalizedQuery);
     const startedAt = Date.now();
 
     this.logger.log(
-      `[exa] Dispatching search request for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
+      `[exa] Dispatching search request for query: ${this.formatQueryForLog(normalizedQuery)}`,
     );
 
     try {
-      const raw = await this.searchWithExa(
-        queryResolution.effectiveQuery,
-        5,
-        queryResolution,
-      );
+      const raw = await this.searchWithExa(normalizedQuery, 5);
       const latencyMs = Date.now() - startedAt;
-      const normalized = rankSearchResults(
-        this.normalizeExaResults(raw),
-        queryResolution.executionHints,
-      );
+      const normalized = this.normalizeExaResults(raw);
 
       this.logSuccess(latencyMs, normalized.length);
 
       return {
         query: normalizedQuery,
-        effectiveQuery: queryResolution.effectiveQuery,
-        appliedLocationFallback: queryResolution.appliedLocationFallback,
-        notes: queryResolution.notes,
         latencyMs,
         normalized,
         raw,
@@ -166,15 +91,14 @@ export class SearchService {
     progress?: SearchExtractProgressHandler,
   ): Promise<SearchExtractInspectionResult> {
     const normalizedQuery = this.normalizeQuery(query);
-    const queryResolution = resolveSearchQuery(normalizedQuery);
     const startedAt = Date.now();
 
     this.logger.log(
-      `[extract] Starting search-then-extract run for query: ${this.formatQueryForLog(queryResolution.effectiveQuery)}`,
+      `[extract] Starting search-then-extract run for query: ${this.formatQueryForLog(normalizedQuery)}`,
     );
 
     const result = await this.runExaSearchThenExtract(
-      queryResolution,
+      normalizedQuery,
       searchLimit,
       extractLimit,
       startedAt,
@@ -187,9 +111,6 @@ export class SearchService {
 
     return {
       query: normalizedQuery,
-      effectiveQuery: queryResolution.effectiveQuery,
-      appliedLocationFallback: queryResolution.appliedLocationFallback,
-      notes: queryResolution.notes,
       searchLimit,
       extractLimit,
       completedAt: new Date().toISOString(),
@@ -198,7 +119,7 @@ export class SearchService {
   }
 
   private async runExaSearchThenExtract(
-    queryResolution: SearchQueryResolution,
+    query: string,
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
@@ -206,7 +127,7 @@ export class SearchService {
   ): Promise<SearchExtractExecutionResult> {
     try {
       return await this.searchThenExtractWithExa(
-        queryResolution,
+        query,
         searchLimit,
         extractLimit,
         startedAt,
@@ -228,14 +149,13 @@ export class SearchService {
   }
 
   private async searchThenExtractWithExa(
-    queryResolution: SearchQueryResolution,
+    query: string,
     searchLimit: number,
     extractLimit: number,
     startedAt: number,
     progress?: SearchExtractProgressHandler,
   ): Promise<SearchExtractExecutionResult> {
     const searchStartedAt = Date.now();
-    const query = queryResolution.effectiveQuery;
 
     this.logger.log(`[extract:exa] Search stage started.`);
     await progress?.({
@@ -244,16 +164,9 @@ export class SearchService {
       searchLimit,
     });
 
-    const searchRaw = await this.searchWithExaDiscovery(
-      query,
-      searchLimit,
-      queryResolution,
-    );
+    const searchRaw = await this.searchWithExa(query, searchLimit);
     const searchLatencyMs = Date.now() - searchStartedAt;
-    const topResults = rankSearchResults(
-      this.normalizeExaResults(searchRaw),
-      queryResolution.executionHints,
-    );
+    const topResults = this.normalizeExaResults(searchRaw);
     const urlsToExtract = topResults
       .slice(0, extractLimit)
       .map((result) => result.url);
@@ -292,14 +205,13 @@ export class SearchService {
 
     const extractRaw =
       urlsToExtract.length > 0
-        ? await this.extractWithExa(urlsToExtract, query, queryResolution)
+        ? await this.extractWithExa(urlsToExtract, query)
         : this.createEmptyExaExtractResponse();
     const extractLatencyMs = Date.now() - extractStartedAt;
     const documents = this.normalizeExaExtractedDocuments(
       extractRaw,
       topResults,
       query,
-      queryResolution.executionHints.intent,
     );
 
     const extractedUrls = new Set(documents.map((document) => document.url));
@@ -362,57 +274,18 @@ export class SearchService {
   private async searchWithExa(
     query: string,
     numResults: number,
-    queryResolution: SearchQueryResolution,
   ): Promise<ExaHighlightsSearchResponse> {
     const exaClient = this.getExaClient();
 
     return exaClient.search(query, {
       numResults,
       type: 'auto',
-      category: queryResolution.executionHints.exaCategory ?? undefined,
-      userLocation: queryResolution.executionHints.exaUserLocation ?? undefined,
-      excludeDomains:
-        queryResolution.executionHints.excludeDomains.length > 0
-          ? queryResolution.executionHints.excludeDomains
-          : undefined,
       contents: {
         highlights: {
           query,
           maxCharacters: 420,
         },
         filterEmptyResults: true,
-        maxAgeHours: queryResolution.executionHints.forceFreshContent
-          ? 0
-          : undefined,
-      },
-    });
-  }
-
-  private async searchWithExaDiscovery(
-    query: string,
-    numResults: number,
-    queryResolution: SearchQueryResolution,
-  ): Promise<ExaHighlightsSearchResponse> {
-    const exaClient = this.getExaClient();
-
-    return exaClient.search(query, {
-      numResults,
-      type: 'auto',
-      category: queryResolution.executionHints.exaCategory ?? undefined,
-      userLocation: queryResolution.executionHints.exaUserLocation ?? undefined,
-      excludeDomains:
-        queryResolution.executionHints.excludeDomains.length > 0
-          ? queryResolution.executionHints.excludeDomains
-          : undefined,
-      contents: {
-        highlights: {
-          query,
-          maxCharacters: 420,
-        },
-        filterEmptyResults: true,
-        maxAgeHours: queryResolution.executionHints.forceFreshContent
-          ? 0
-          : undefined,
       },
     });
   }
@@ -420,35 +293,18 @@ export class SearchService {
   private async extractWithExa(
     urls: string[],
     query: string,
-    queryResolution: SearchQueryResolution,
   ): Promise<ExaExtractSearchResponse> {
     const exaClient = this.getExaClient();
 
     const response = await exaClient.getContents(urls, {
       text: {
-        maxCharacters:
-          queryResolution.executionHints.intent === 'current-weather'
-            ? 1800
-            : 2600,
-        verbosity:
-          queryResolution.executionHints.intent === 'current-weather'
-            ? 'compact'
-            : undefined,
-        excludeSections:
-          queryResolution.executionHints.intent !== 'general'
-            ? ['navigation', 'footer', 'sidebar', 'metadata', 'banner']
-            : undefined,
+        maxCharacters: 2600,
       },
       highlights: {
         query,
-        maxCharacters:
-          queryResolution.executionHints.intent !== 'general' ? 900 : 1200,
+        maxCharacters: 1200,
       },
-      summary: this.getExaSummaryRequest(queryResolution.executionHints.intent),
       filterEmptyResults: true,
-      maxAgeHours: queryResolution.executionHints.forceFreshContent
-        ? 0
-        : undefined,
     });
 
     return response as ExaExtractSearchResponse;
@@ -486,7 +342,6 @@ export class SearchService {
     raw: ExaExtractSearchResponse,
     searchResults: NormalizedSearchResult[],
     query: string,
-    intent: SearchIntent,
   ): ExtractedDocument[] {
     const searchResultsByUrl = new Map(
       searchResults.map((result) => [result.url, result] as const),
@@ -495,16 +350,6 @@ export class SearchService {
     return raw.results.map((result) => {
       const searchResult = searchResultsByUrl.get(result.url);
       const content = this.getExaContent(result);
-      const weatherSnapshot =
-        intent === 'current-weather'
-          ? this.parseWeatherSnapshot(result.summary)
-          : null;
-      const providerSummary = this.normalizeProviderSummary(result.summary);
-      const structuredSummary = this.parseStructuredSummary(
-        intent,
-        result.summary,
-        weatherSnapshot,
-      );
 
       return {
         title: result.title ?? searchResult?.title ?? result.url,
@@ -517,12 +362,10 @@ export class SearchService {
           result.highlights,
           content,
           query,
-          intent,
-          structuredSummary,
         ),
-        providerSummary,
-        structuredSummary,
-        weatherSnapshot,
+        providerSummary: null,
+        structuredSummary: null,
+        weatherSnapshot: null,
       };
     });
   }
@@ -596,16 +439,7 @@ export class SearchService {
     highlights: string[] | null | undefined,
     content: string,
     query: string,
-    intent: SearchIntent,
-    structuredSummary: StructuredSummary | null = null,
   ): string {
-    const structuredSummaryExcerpt =
-      this.formatStructuredSummary(structuredSummary);
-
-    if (structuredSummaryExcerpt) {
-      return structuredSummaryExcerpt;
-    }
-
     const highlightsText = cleanContent(this.joinHighlights(highlights));
 
     if (highlightsText) {
@@ -614,235 +448,7 @@ export class SearchService {
         : `${highlightsText.slice(0, 897).trimEnd()}...`;
     }
 
-    return this.contentExcerptService.buildExcerpt(content, query, intent);
-  }
-
-  private getExaSummaryRequest(
-    intent: SearchIntent,
-  ): { query: string; schema: Record<string, unknown> } | undefined {
-    switch (intent) {
-      case 'current-weather':
-        return {
-          query:
-            'Extract the current weather conditions only. Return current temperature, feels like, humidity, wind, condition, local observation time, and today high/low if present.',
-          schema: EXA_CURRENT_WEATHER_SUMMARY_SCHEMA,
-        };
-
-      case 'market-price':
-        return {
-          query:
-            'Extract the current market quote only. Return the asset name, current price, quote time, currency, change, percent change, market status, exchange, and day range if present.',
-          schema: EXA_MARKET_PRICE_SUMMARY_SCHEMA,
-        };
-
-      case 'sports-score':
-        return {
-          query:
-            'Extract the latest score update only. Return the event, competition, current status, score, both teams or players, winner if final, period or quarter if live, and event time if present.',
-          schema: EXA_SPORTS_SCORE_SUMMARY_SCHEMA,
-        };
-
-      default:
-        return undefined;
-    }
-  }
-
-  private normalizeProviderSummary(
-    summary: string | null | undefined,
-  ): string | null {
-    const normalizedSummary = typeof summary === 'string' ? summary.trim() : '';
-
-    return normalizedSummary || null;
-  }
-
-  private parseStructuredSummary(
-    intent: SearchIntent,
-    summary: string | null | undefined,
-    weatherSnapshot: WeatherSnapshot | null,
-  ): StructuredSummary | null {
-    switch (intent) {
-      case 'current-weather':
-        return this.buildWeatherStructuredSummary(weatherSnapshot);
-      case 'market-price':
-        return this.parseMarketPriceStructuredSummary(summary);
-      case 'sports-score':
-        return this.parseSportsScoreStructuredSummary(summary);
-      default:
-        return null;
-    }
-  }
-
-  private parseWeatherSnapshot(
-    summary: string | null | undefined,
-  ): WeatherSnapshot | null {
-    const parsed = this.parseSummaryJson(summary);
-
-    if (!parsed) {
-      return null;
-    }
-
-    const snapshot: WeatherSnapshot = {
-      location: this.getOptionalString(parsed.location),
-      observationTime: this.getOptionalString(parsed.observationTime),
-      condition: this.getOptionalString(parsed.condition),
-      temperature: this.getOptionalString(parsed.temperature),
-      feelsLike: this.getOptionalString(parsed.feelsLike),
-      humidity: this.getOptionalString(parsed.humidity),
-      wind: this.getOptionalString(parsed.wind),
-      high: this.getOptionalString(parsed.high),
-      low: this.getOptionalString(parsed.low),
-    };
-
-    return Object.values(snapshot).some((value) => value !== null)
-      ? snapshot
-      : null;
-  }
-
-  private buildWeatherStructuredSummary(
-    snapshot: WeatherSnapshot | null,
-  ): StructuredSummary | null {
-    if (!snapshot) {
-      return null;
-    }
-
-    return this.createStructuredSummary('weather', snapshot.location, [
-      ['As of', snapshot.observationTime],
-      ['Condition', snapshot.condition],
-      ['Temperature', snapshot.temperature],
-      ['Feels like', snapshot.feelsLike],
-      ['Humidity', snapshot.humidity],
-      ['Wind', snapshot.wind],
-      [
-        'High / Low',
-        snapshot.high || snapshot.low
-          ? `${snapshot.high ?? 'n/a'} / ${snapshot.low ?? 'n/a'}`
-          : null,
-      ],
-    ]);
-  }
-
-  private parseMarketPriceStructuredSummary(
-    summary: string | null | undefined,
-  ): StructuredSummary | null {
-    const parsed = this.parseSummaryJson(summary);
-
-    if (!parsed) {
-      return null;
-    }
-
-    return this.createStructuredSummary(
-      'market-price',
-      this.getOptionalString(parsed.asset) ?? 'Current market quote',
-      [
-        ['As of', this.getOptionalString(parsed.quoteTime)],
-        ['Price', this.getOptionalString(parsed.price)],
-        ['Currency', this.getOptionalString(parsed.currency)],
-        ['Change', this.getOptionalString(parsed.change)],
-        ['Change %', this.getOptionalString(parsed.percentChange)],
-        ['Status', this.getOptionalString(parsed.marketStatus)],
-        ['Exchange', this.getOptionalString(parsed.exchange)],
-        ['Range', this.getOptionalString(parsed.dayRange)],
-      ],
-    );
-  }
-
-  private parseSportsScoreStructuredSummary(
-    summary: string | null | undefined,
-  ): StructuredSummary | null {
-    const parsed = this.parseSummaryJson(summary);
-
-    if (!parsed) {
-      return null;
-    }
-
-    const teamA = this.getOptionalString(parsed.teamA);
-    const teamB = this.getOptionalString(parsed.teamB);
-    const event =
-      this.getOptionalString(parsed.event) ??
-      [teamA, teamB]
-        .filter((value): value is string => Boolean(value))
-        .join(' vs ');
-
-    return this.createStructuredSummary(
-      'sports-score',
-      event || 'Score update',
-      [
-        ['Competition', this.getOptionalString(parsed.competition)],
-        ['Status', this.getOptionalString(parsed.status)],
-        ['Score', this.getOptionalString(parsed.score)],
-        ['Period', this.getOptionalString(parsed.period)],
-        ['Winner', this.getOptionalString(parsed.winner)],
-        ['Event time', this.getOptionalString(parsed.eventTime)],
-      ],
-    );
-  }
-
-  private createStructuredSummary(
-    type: StructuredSummary['type'],
-    heading: string | null,
-    entries: Array<[string, string | null]>,
-  ): StructuredSummary | null {
-    const fields = entries
-      .filter((entry): entry is [string, string] => Boolean(entry[1]))
-      .map(([label, value]) => ({
-        label,
-        value,
-      }));
-
-    if (!heading && fields.length === 0) {
-      return null;
-    }
-
-    return {
-      type,
-      heading,
-      fields,
-    };
-  }
-
-  private formatStructuredSummary(summary: StructuredSummary | null): string {
-    if (!summary) {
-      return '';
-    }
-
-    const segments = [
-      summary.heading,
-      ...summary.fields.map((field) => `${field.label}: ${field.value}`),
-    ].filter((segment): segment is string => Boolean(segment));
-
-    return segments.join('. ');
-  }
-
-  private parseSummaryJson(
-    summary: string | null | undefined,
-  ): Record<string, unknown> | null {
-    if (!summary) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(summary) as Record<string, unknown>;
-    } catch {
-      return null;
-    }
-  }
-
-  private getOptionalString(value: unknown): string | null {
-    if (typeof value !== 'string') {
-      return null;
-    }
-
-    const normalized = value.trim();
-
-    if (!normalized) {
-      return null;
-    }
-
-    if (/^(null|n\/a|none|unknown)$/i.test(normalized)) {
-      return null;
-    }
-
-    return normalized;
+    return this.contentExcerptService.buildExcerpt(content, query);
   }
 
   private joinHighlights(highlights: string[] | null | undefined): string {

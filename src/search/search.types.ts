@@ -8,9 +8,6 @@ export interface NormalizedSearchResult {
 
 export interface SearchExecutionResult {
   query: string;
-  effectiveQuery: string;
-  appliedLocationFallback: string | null;
-  notes: string[];
   latencyMs: number;
   normalized: NormalizedSearchResult[];
   raw: unknown;
@@ -30,6 +27,12 @@ export interface SearchStageResult extends ProviderStageMetadata {
   resolvedSearchType: string | null;
 }
 
+/**
+ * Legacy structured-summary types. Always populated as null in the current
+ * pipeline because intent-driven structured extraction was removed.
+ * Retained on ExtractedDocument so the JSON knowledge store schema does not
+ * change shape between releases.
+ */
 export type StructuredSummaryType = 'weather' | 'market-price' | 'sports-score';
 
 export interface StructuredSummaryField {
@@ -89,9 +92,6 @@ export interface SearchExtractExecutionResult {
 
 export interface SearchExtractInspectionResult {
   query: string;
-  effectiveQuery: string;
-  appliedLocationFallback: string | null;
-  notes: string[];
   searchLimit: number;
   extractLimit: number;
   totalLatencyMs: number;

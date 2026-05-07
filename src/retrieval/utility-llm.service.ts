@@ -613,6 +613,10 @@ export class UtilityLlmService {
     input: UtilityLlmRetrievalSupportInput,
     imageParts: ImageInputPart[],
   ): string {
+    const locationLine = input.userLocation
+      ? `User location (granted by the user, may be used to make queries location-accurate): latitude ${input.userLocation.latitude}, longitude ${input.userLocation.longitude}${typeof input.userLocation.accuracyMeters === 'number' ? `, accuracy ~${Math.round(input.userLocation.accuracyMeters)}m` : ''}.`
+      : 'User location: not provided. Do not invent or assume a location.';
+
     return [
       'You are retrieval support for the Swirlock RAG Engine.',
       'Return JSON only. Do not answer the user.',
@@ -627,6 +631,8 @@ export class UtilityLlmService {
       '- searchQueries should contain up to 3 search-engine-ready queries.',
       '- imageObservations should contain visible facts only, no speculation.',
       '- Use null for queryText when no searchable query can be derived.',
+      '- When the user location is provided AND the question is location-sensitive (current weather, nearby places, local time, local prices, local events), include the coordinates or a place name you can derive from them in queryText and searchQueries so the search results are location-accurate.',
+      '- When no user location is provided, do not assume one. Ask for nothing; just leave the query general.',
       '',
       `Original text query: ${input.queryText || '(none)'}`,
       `Caller intent: ${input.intent || '(none)'}`,
@@ -634,6 +640,7 @@ export class UtilityLlmService {
       `Allowed modes: ${input.allowedModes.join(', ') || '(none)'}`,
       `Hints: ${JSON.stringify(input.hints)}`,
       `Image URLs attached for inspection: ${imageParts.length}`,
+      locationLine,
     ].join('\n');
   }
 

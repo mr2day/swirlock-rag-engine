@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import type { SearchIntent } from './search-query-resolver';
 import { cleanContent } from './content-cleaner';
 
 @Injectable()
@@ -65,15 +64,9 @@ export class ContentExcerptService {
     /weather near/i,
     /contact us/i,
     /subscription services/i,
-    /weather history/i,
-    /historical data/i,
   ];
 
-  buildExcerpt(
-    content: string,
-    query: string,
-    intent: SearchIntent = 'general',
-  ): string {
+  buildExcerpt(content: string, query: string): string {
     const cleanedContent = cleanContent(content);
     const blocks = this.extractCandidateBlocks(cleanedContent);
 
@@ -86,7 +79,7 @@ export class ContentExcerptService {
       .map((block, index) => ({
         block,
         index,
-        score: this.scoreBlock(block, queryTerms, intent),
+        score: this.scoreBlock(block, queryTerms),
       }))
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score);
@@ -144,11 +137,7 @@ export class ContentExcerptService {
       .filter((term) => !this.stopWords.has(term));
   }
 
-  private scoreBlock(
-    block: string,
-    queryTerms: string[],
-    intent: SearchIntent,
-  ): number {
+  private scoreBlock(block: string, queryTerms: string[]): number {
     const lower = block.toLowerCase();
     const wordCount = block.split(/\s+/).filter(Boolean).length;
 
@@ -167,8 +156,6 @@ export class ContentExcerptService {
     if (/[.!?]/.test(block)) {
       score += 6;
     }
-
-    score += this.scoreIntentSignals(lower, intent);
 
     if (queryTerms.length > 0) {
       score += queryTerms.reduce((total, term) => {
@@ -193,160 +180,6 @@ export class ContentExcerptService {
 
     if (colonCount > 6) {
       score -= 4;
-    }
-
-    if (
-      block.length < 500 &&
-      !/[.!?]/.test(block) &&
-      !/\b(current|temperature|humidity|wind|forecast|price|score|result)\b/i.test(
-        lower,
-      )
-    ) {
-      score -= 8;
-    }
-
-    return score;
-  }
-
-  private scoreIntentSignals(lower: string, intent: SearchIntent): number {
-    switch (intent) {
-      case 'current-weather':
-        return this.scoreCurrentWeatherSignals(lower);
-      case 'market-price':
-        return this.scoreMarketPriceSignals(lower);
-      case 'sports-score':
-        return this.scoreSportsScoreSignals(lower);
-      default:
-        return 0;
-    }
-  }
-
-  private scoreCurrentWeatherSignals(lower: string): number {
-    let score = 0;
-
-    if (
-      /\b\d+(?:\.\d+)?\s?(?:\u00b0|deg(?:rees)?|f|c|mph|km\/h|kt|%|mb|hpa|in)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 18;
-    }
-
-    if (
-      /\b(current weather|current weather conditions|humidity|temperature|feels like|realfeel|wind|dew point|pressure|visibility|cloud cover)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 24;
-    }
-
-    if (
-      /\b(currently|temperature of|realfeel|humidity|dew point|visibility|partly sunny|mostly cloudy|sunny|clear)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 18;
-    }
-
-    if (/\b(today|tonight|hourly|daily|now|last update|as of)\b/i.test(lower)) {
-      score += 8;
-    }
-
-    if (
-      /\b(wildfire|tornado|astronomy|travel|sports|business|climate|health|featured stories|top stories|trending|newsletter)\b/i.test(
-        lower,
-      )
-    ) {
-      score -= 18;
-    }
-
-    if (
-      /\b(history|historical|april 2026|may 2026|january|february)\b/i.test(
-        lower,
-      )
-    ) {
-      score -= 20;
-    }
-
-    if (
-      /\b(weather channel is the world's most accurate forecaster|accuweather founder|download app)\b/i.test(
-        lower,
-      )
-    ) {
-      score -= 24;
-    }
-
-    return score;
-  }
-
-  private scoreMarketPriceSignals(lower: string): number {
-    let score = 0;
-
-    if (
-      /\b(current price|live price|stock price|share price|market price|latest quote|market cap|percent change|trading at|day range|open|high|low|volume|bid|ask)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 24;
-    }
-
-    if (
-      /\b(usd|eur|ron|gbp|jpy|btc|eth|crypto|cryptocurrency|exchange rate|forex|nasdaq|nyse|after hours|pre-market)\b/i.test(
-        lower,
-      ) ||
-      /[$\u20ac\u00a3\u00a5]/.test(lower)
-    ) {
-      score += 18;
-    }
-
-    if (
-      /\b(currently|today|right now|as of|market open|market close)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 8;
-    }
-
-    if (
-      /\b(history|historical|forecast|prediction|price target|analysis|opinion|long-term)\b/i.test(
-        lower,
-      )
-    ) {
-      score -= 22;
-    }
-
-    return score;
-  }
-
-  private scoreSportsScoreSignals(lower: string): number {
-    let score = 0;
-
-    if (
-      /\b(live score|final score|box score|scoreboard|match result|game result|full[- ]time|halftime|quarter|period|innings|set point|goals?|points?|runs?|beats?|defeated|wins?)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 24;
-    }
-
-    if (
-      /\b(game|match|vs|versus|nba|wnba|nfl|mlb|nhl|epl|uefa|champions league|premier league|laliga|la liga|serie a|bundesliga|soccer|football|basketball|baseball|hockey|tennis)\b/i.test(
-        lower,
-      )
-    ) {
-      score += 18;
-    }
-
-    if (/\b(today|tonight|live|final|kickoff|as of)\b/i.test(lower)) {
-      score += 8;
-    }
-
-    if (
-      /\b(standings|schedule|preview|roster|squad|table|fixtures|tickets|news)\b/i.test(
-        lower,
-      )
-    ) {
-      score -= 20;
     }
 
     return score;

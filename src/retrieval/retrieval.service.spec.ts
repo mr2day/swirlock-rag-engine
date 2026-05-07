@@ -624,7 +624,7 @@ describe('RetrievalService', () => {
     ).toBe(true);
   });
 
-  it('skips Utility LLM post-processing for routine weather retrieval', async () => {
+  it('skips extraction summaries when skipUtilitySummaries is true', async () => {
     const {
       service,
       searchThenExtract,
@@ -642,25 +642,12 @@ describe('RetrievalService', () => {
       excerpt: 'Sunny now with a chance of showers later.',
       providerSummary: null,
       structuredSummary: null,
-      weatherSnapshot: {
-        location: 'Bucharest',
-        observationTime: '2026-05-07T09:00:00.000Z',
-        condition: 'Sunny',
-        temperature: '24 C',
-        feelsLike: '25 C',
-        humidity: '45%',
-        wind: '10 km/h',
-        high: '26 C',
-        low: '14 C',
-      },
+      weatherSnapshot: null,
     };
 
     knowledgeSearch.mockResolvedValue([]);
     searchThenExtract.mockResolvedValue({
-      query: 'weather forecast Bucharest this evening rain',
-      effectiveQuery: 'weather forecast Bucharest this evening rain',
-      appliedLocationFallback: null,
-      notes: [],
+      query: 'weather forecast in Bucharest this evening',
       searchLimit: 5,
       extractLimit: 3,
       totalLatencyMs: 12,
@@ -689,15 +676,16 @@ describe('RetrievalService', () => {
             text: 'dar in bucuresti cum va fi vremea diseara?',
           },
         ],
-        resolvedQueryText: 'weather forecast Bucharest this evening rain',
+        resolvedQueryText: 'weather forecast in Bucharest this evening',
         intent: 'weather_forecast',
         freshness: 'high',
+        skipUtilitySummaries: true,
       }),
       'turn-weather',
     );
 
     expect(summarizeExtractedDocuments).not.toHaveBeenCalled();
-    expect(result.evidenceChunks[0]?.content).toContain('condition: Sunny');
+    expect(result.evidenceChunks[0]?.content).toContain('Sunny now');
     expect(
       result.retrievalDiagnostics.utilityLlm?.usedForExtractionSummaries,
     ).toBe(false);

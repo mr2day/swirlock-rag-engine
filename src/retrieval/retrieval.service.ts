@@ -7,10 +7,6 @@ import type {
   ExtractedDocument,
   NormalizedSearchResult,
 } from '../search/search.types';
-import {
-  resolveSearchQuery,
-  type SearchQueryResolution,
-} from '../search/search-query-resolver';
 import { EmbeddingServiceService } from './embedding-service.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
@@ -148,6 +144,9 @@ export class RetrievalService {
         intent: request.query.intent,
         hints: request.query.hints,
         imageParts,
+        ...(request.query.userLocation
+          ? { userLocation: request.query.userLocation }
+          : {}),
       },
     );
 
@@ -163,16 +162,12 @@ export class RetrievalService {
       diagnostics: utilitySupport.diagnostics,
     });
 
-    const queryText = (
+    const effectiveQuery = (
       utilitySupport.queryText ||
       utilitySupport.searchQueries[0] ||
       initialQueryText
     ).trim();
-    const hasSearchableText = queryText.length > 0;
-    const queryResolution = hasSearchableText
-      ? resolveSearchQuery(queryText)
-      : null;
-    const effectiveQuery = queryResolution?.effectiveQuery ?? queryText;
+    const hasSearchableText = effectiveQuery.length > 0;
     const imageObservations =
       utilitySupport.imageObservations.length > 0
         ? utilitySupport.imageObservations
@@ -181,7 +176,6 @@ export class RetrievalService {
     const intent =
       request.query.intent?.trim() ||
       utilitySupport.intent ||
-      queryResolution?.executionHints.intent ||
       (imageParts.length > 0 ? 'image-supported-retrieval' : 'general');
     const shouldProbeLocal =
       hasSearchableText && request.query.allowedModes.includes('local_rag');
@@ -280,7 +274,6 @@ export class RetrievalService {
           effectiveQuery,
           intent,
           request,
-          queryResolution,
           correlationId,
           publish,
         )
@@ -350,7 +343,6 @@ export class RetrievalService {
       normalizedQuery,
       searchQueries: this.buildSearchQueries(
         initialQueryText,
-        queryText,
         effectiveQuery,
         utilitySupport.searchQueries,
       ),
@@ -396,7 +388,6 @@ export class RetrievalService {
     effectiveQuery: string,
     intent: string,
     request: ValidatedRetrieveEvidenceRequest,
-    queryResolution: SearchQueryResolution | null,
     correlationId: string,
     publish: RetrievalProgressPublisher,
   ): Promise<LiveRetrievalResult> {
@@ -469,7 +460,6 @@ export class RetrievalService {
     const warnings: string[] = [];
     const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
     const shouldUseExtractionSummaries = !this.shouldSkipExtractionSummaries(
-      intent,
       request.query.skipUtilitySummaries,
     );
     const extractionSummaries = shouldUseExtractionSummaries
@@ -492,7 +482,7 @@ export class RetrievalService {
     try {
       await this.knowledgeStore.upsertExtractedDocuments(
         documents,
-        queryResolution?.effectiveQuery ?? effectiveQuery,
+        effectiveQuery,
         intent,
         retrievedAt,
         request.query.freshness,
@@ -684,10 +674,7 @@ export class RetrievalService {
       sourceTitle: document.title || document.url,
       sourceUrl: document.url,
       content: this.limitEvidenceContent(
-        utilitySummary ||
-          this.buildStructuredDocumentContent(document) ||
-          document.excerpt ||
-          document.content,
+        utilitySummary || document.excerpt || document.content,
       ),
       relevanceScore: this.roundScore(document.score ?? fallbackScore),
       freshnessScore: this.scoreFreshness(
@@ -700,64 +687,9 @@ export class RetrievalService {
   }
 
   private shouldSkipExtractionSummaries(
-    intent: string,
     skipUtilitySummaries: boolean,
   ): boolean {
-    return skipUtilitySummaries || this.isRoutineWeatherIntent(intent);
-  }
-
-  private isRoutineWeatherIntent(intent: string): boolean {
-    return new Set([
-      'weather',
-      'weather_forecast',
-      'current_weather',
-      'current_weather_forecast',
-      'current_conditions',
-    ]).has(this.normalizeIntentLabel(intent));
-  }
-
-  private normalizeIntentLabel(intent: string): string {
-    return intent
-      .trim()
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_+|_+$/g, '');
-  }
-
-  private buildStructuredDocumentContent(
-    document: ExtractedDocument,
-  ): string | null {
-    if (document.weatherSnapshot) {
-      const snapshot = document.weatherSnapshot;
-      const fields = [
-        ['location', snapshot.location],
-        ['observed', snapshot.observationTime],
-        ['condition', snapshot.condition],
-        ['temperature', snapshot.temperature],
-        ['feels like', snapshot.feelsLike],
-        ['humidity', snapshot.humidity],
-        ['wind', snapshot.wind],
-        ['high', snapshot.high],
-        ['low', snapshot.low],
-      ]
-        .filter((entry): entry is [string, string] => Boolean(entry[1]))
-        .map(([label, value]) => `${label}: ${value}`);
-
-      if (fields.length > 0) {
-        return fields.join('; ');
-      }
-    }
-
-    if (document.structuredSummary) {
-      const fields = document.structuredSummary.fields
-        .map((field) => `${field.label}: ${field.value}`)
-        .join('; ');
-      return [document.structuredSummary.heading, fields]
-        .filter(Boolean)
-        .join('; ');
-    }
-
-    return document.providerSummary;
+    return skipUtilitySummaries;
   }
 
   private buildImageReferenceEvidence(
@@ -829,15 +761,12 @@ export class RetrievalService {
 
   private buildSearchQueries(
     initialQueryText: string,
-    queryText: string,
     effectiveQuery: string,
     utilityQueries: string[],
   ): string[] {
     return [
       ...new Set(
-        [effectiveQuery, queryText, ...utilityQueries, initialQueryText].filter(
-          Boolean,
-        ),
+        [effectiveQuery, ...utilityQueries, initialQueryText].filter(Boolean),
       ),
     ];
   }

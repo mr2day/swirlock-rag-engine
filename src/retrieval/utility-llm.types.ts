@@ -1,4 +1,4 @@
-import type { ImageInputPart } from './retrieval.types';
+import type { ImageInputPart, UserLocation } from './retrieval.types';
 
 export interface UtilityLlmStatus {
   enabled: boolean;
@@ -39,6 +39,7 @@ export interface UtilityLlmRetrievalSupportInput {
   intent?: string;
   hints: Array<{ kind: string; text: string }>;
   imageParts: ImageInputPart[];
+  userLocation?: UserLocation;
 }
 
 export interface UtilityLlmRetrievalSupport {
