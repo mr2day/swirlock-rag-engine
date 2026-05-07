@@ -96,6 +96,14 @@ describe('RetrievalService', () => {
       warnings: [],
       diagnostics: [],
     });
+    const decideDocumentRetention = jest.fn().mockResolvedValue({
+      retentionByUrl: new Map<
+        string,
+        { retention: 'durable' | 'ephemeral' | 'reject'; reason: string }
+      >(),
+      warnings: [],
+      diagnostics: [],
+    });
     const searchService = {
       searchThenExtract,
     } as unknown as jest.Mocked<SearchService>;
@@ -113,6 +121,7 @@ describe('RetrievalService', () => {
       getStatus: utilityGetStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,
+      decideDocumentRetention,
     } as unknown as jest.Mocked<UtilityLlmService>;
     const embeddingService = {
       getConfiguration: embeddingGetConfiguration,
@@ -137,6 +146,7 @@ describe('RetrievalService', () => {
       utilityGetStatus,
       prepareRetrievalSupport,
       summarizeExtractedDocuments,
+      decideDocumentRetention,
       embeddingGetConfiguration,
       embeddingEmbed,
     };
@@ -319,6 +329,7 @@ describe('RetrievalService', () => {
       searchThenExtract,
       knowledgeSearch,
       upsertExtractedDocuments,
+      decideDocumentRetention,
     } = makeHarness();
     const document: ExtractedDocument = {
       title: 'RAG evaluation benchmark update',
@@ -335,6 +346,24 @@ describe('RetrievalService', () => {
 
     knowledgeSearch.mockResolvedValue([]);
     upsertExtractedDocuments.mockResolvedValue([]);
+    decideDocumentRetention.mockResolvedValue({
+      retentionByUrl: new Map([
+        [
+          document.url,
+          { retention: 'durable', reason: 'Stable benchmark information.' },
+        ],
+      ]),
+      warnings: [],
+      diagnostics: [
+        {
+          task: 'document_retention',
+          attempted: true,
+          succeeded: true,
+          durationMs: 4,
+          attempts: 1,
+        },
+      ],
+    });
     searchThenExtract.mockResolvedValue({
       query: 'latest RAG evaluation methods',
       effectiveQuery: 'latest RAG evaluation methods',
@@ -384,8 +413,26 @@ describe('RetrievalService', () => {
       expect.any(String),
       'low',
     );
+    expect(decideDocumentRetention).toHaveBeenCalledWith({
+      correlationId: 'turn-1',
+      queryText: 'latest RAG evaluation methods',
+      intent: 'general',
+      freshness: 'low',
+      documents: [
+        {
+          title: document.title,
+          url: document.url,
+          publishedAt: document.publishedAt,
+          excerpt: document.excerpt,
+          content: document.content,
+        },
+      ],
+    });
     expect(result.normalizedQuery.retrievalMode).toBe('live_web');
     expect(result.evidenceChunks[0]?.sourceType).toBe('web');
+    expect(
+      result.retrievalDiagnostics.liveDocumentRetention?.durableCount,
+    ).toBe(1);
   });
 
   it('uses Utility LLM query support when available', async () => {
@@ -630,6 +677,8 @@ describe('RetrievalService', () => {
       searchThenExtract,
       knowledgeSearch,
       summarizeExtractedDocuments,
+      decideDocumentRetention,
+      upsertExtractedDocuments,
     } = makeHarness();
     const document: ExtractedDocument = {
       title: 'Bucharest current weather',
@@ -646,6 +695,27 @@ describe('RetrievalService', () => {
     };
 
     knowledgeSearch.mockResolvedValue([]);
+    decideDocumentRetention.mockResolvedValue({
+      retentionByUrl: new Map([
+        [
+          document.url,
+          {
+            retention: 'ephemeral',
+            reason: 'Useful for the current turn only.',
+          },
+        ],
+      ]),
+      warnings: [],
+      diagnostics: [
+        {
+          task: 'document_retention',
+          attempted: true,
+          succeeded: true,
+          durationMs: 4,
+          attempts: 1,
+        },
+      ],
+    });
     searchThenExtract.mockResolvedValue({
       query: 'weather forecast in Bucharest this evening',
       searchLimit: 5,
@@ -685,10 +755,18 @@ describe('RetrievalService', () => {
     );
 
     expect(summarizeExtractedDocuments).not.toHaveBeenCalled();
+    expect(decideDocumentRetention).toHaveBeenCalled();
+    expect(upsertExtractedDocuments).not.toHaveBeenCalled();
     expect(result.evidenceChunks[0]?.content).toContain('Sunny now');
     expect(
       result.retrievalDiagnostics.utilityLlm?.usedForExtractionSummaries,
     ).toBe(false);
+    expect(
+      result.retrievalDiagnostics.utilityLlm?.usedForDocumentRetention,
+    ).toBe(true);
+    expect(
+      result.retrievalDiagnostics.liveDocumentRetention?.ephemeralCount,
+    ).toBe(1);
   });
 
   it('returns live evidence when cache persistence fails', async () => {
@@ -697,6 +775,7 @@ describe('RetrievalService', () => {
       searchThenExtract,
       knowledgeSearch,
       upsertExtractedDocuments,
+      decideDocumentRetention,
     } = makeHarness();
     const document: ExtractedDocument = {
       title: 'RAG evaluation benchmark update',
@@ -712,6 +791,24 @@ describe('RetrievalService', () => {
     };
 
     knowledgeSearch.mockResolvedValue([]);
+    decideDocumentRetention.mockResolvedValue({
+      retentionByUrl: new Map([
+        [
+          document.url,
+          { retention: 'durable', reason: 'Stable benchmark information.' },
+        ],
+      ]),
+      warnings: [],
+      diagnostics: [
+        {
+          task: 'document_retention',
+          attempted: true,
+          succeeded: true,
+          durationMs: 4,
+          attempts: 1,
+        },
+      ],
+    });
     upsertExtractedDocuments.mockRejectedValue(new Error('disk is full'));
     searchThenExtract.mockResolvedValue({
       query: 'latest RAG evaluation methods',

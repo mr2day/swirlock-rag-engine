@@ -104,6 +104,7 @@ export interface RetrievalDiagnostics {
     usedForQuery: boolean;
     usedForImages: boolean;
     usedForExtractionSummaries: boolean;
+    usedForDocumentRetention: boolean;
     calls: Array<{
       task: string;
       attempted: boolean;
@@ -111,6 +112,19 @@ export interface RetrievalDiagnostics {
       durationMs: number;
       attempts: number;
       error?: string;
+    }>;
+  };
+  liveDocumentRetention?: {
+    totalDocuments: number;
+    durableCount: number;
+    ephemeralCount: number;
+    rejectCount: number;
+    undecidedCount: number;
+    decisions: Array<{
+      title: string;
+      url: string;
+      retention: 'durable' | 'ephemeral' | 'reject' | 'undecided';
+      reason?: string;
     }>;
   };
   embeddingService?: {
@@ -156,6 +170,8 @@ export type RetrievalStreamEventType =
   | 'live.extract.completed'
   | 'utility_llm.extraction_summaries.started'
   | 'utility_llm.extraction_summaries.completed'
+  | 'utility_llm.document_retention.started'
+  | 'utility_llm.document_retention.completed'
   | 'evidence.chunk'
   | 'retrieval.completed'
   | 'retrieval.failed';

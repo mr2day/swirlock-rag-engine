@@ -178,6 +178,68 @@ describe('UtilityLlmService', () => {
     expect(result.warnings[0]).toContain('unusable JSON');
   });
 
+  it('requests document retention with thinking disabled', async () => {
+    let sentRequest: Record<string, unknown> | null = null;
+
+    FakeWebSocket.onSend = (socket, data) => {
+      sentRequest = JSON.parse(data) as Record<string, unknown>;
+      socket.emitMessage({ type: 'accepted' });
+      socket.emitMessage({ type: 'started' });
+      socket.emitMessage({
+        type: 'chunk',
+        correlationId: 'test-correlation',
+        payload: {
+          text: JSON.stringify({
+            documents: [
+              {
+                index: 1,
+                retention: 'durable',
+                reason: 'Stable background knowledge.',
+              },
+            ],
+            overallReason: 'The source is durable.',
+          }),
+        },
+      });
+      socket.emitMessage({
+        type: 'done',
+        correlationId: 'test-correlation',
+        payload: { finishReason: 'stop' },
+      });
+    };
+
+    const result = await makeService().decideDocumentRetention({
+      correlationId: 'test-correlation',
+      queryText: 'Pericles and Aspasia',
+      intent: 'historical-background',
+      freshness: 'low',
+      documents: [
+        {
+          title: 'Aspasia',
+          url: 'https://example.com/aspasia',
+          publishedAt: null,
+          excerpt: 'Aspasia was associated with Pericles in classical Athens.',
+          content: 'Aspasia was associated with Pericles in classical Athens.',
+        },
+      ],
+    });
+
+    const payload = sentRequest?.payload as {
+      request?: {
+        options?: { thinking?: boolean; responseFormat?: string };
+        input?: { parts?: Array<{ text?: string }> };
+      };
+    };
+
+    expect(payload.request?.options?.thinking).toBe(false);
+    expect(payload.request?.options?.responseFormat).toBe('json');
+    expect(payload.request?.input?.parts?.[0]?.text).toContain('Document 1');
+    expect(result.retentionByUrl.get('https://example.com/aspasia')).toEqual({
+      retention: 'durable',
+      reason: 'Stable background knowledge.',
+    });
+  });
+
   it('returns model-host status through the WebSocket endpoint', async () => {
     FakeWebSocket.onSend = (socket) => {
       socket.emitMessage({

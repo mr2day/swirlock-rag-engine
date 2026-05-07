@@ -362,6 +362,8 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
           'live.extract.completed': 'Sources read',
           'utility_llm.extraction_summaries.started': 'Summarizing sources',
           'utility_llm.extraction_summaries.completed': 'Summaries ready',
+          'utility_llm.document_retention.started': 'Classifying retention',
+          'utility_llm.document_retention.completed': 'Retention ready',
           'evidence.chunk': 'Evidence chunk',
           'retrieval.completed': 'Retrieval complete',
           'retrieval.failed': 'Retrieval failed',
@@ -374,6 +376,7 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
           'live.search.completed': 'live.search.started',
           'live.extract.completed': 'live.extract.started',
           'utility_llm.extraction_summaries.completed': 'utility_llm.extraction_summaries.started',
+          'utility_llm.document_retention.completed': 'utility_llm.document_retention.started',
         };
 
         const queryInput = document.getElementById('query-input');

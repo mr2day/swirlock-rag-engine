@@ -39,13 +39,13 @@ describe('knowledge indexing helpers', () => {
     expect(first[0]?.content).toContain('retrieval augmented generation');
   });
 
-  it('scores official sources above generic community sources', () => {
+  it('keeps source quality neutral instead of using domain heuristics', () => {
     expect(
       scoreSourceQuality({
         sourceUrl: 'https://docs.example.gov/retrieval',
         sourceTitle: 'Official retrieval documentation',
       }),
-    ).toBeGreaterThan(
+    ).toBe(
       scoreSourceQuality({
         sourceUrl: 'https://reddit.com/r/rag/comments/1',
         sourceTitle: 'RAG discussion',
@@ -53,16 +53,16 @@ describe('knowledge indexing helpers', () => {
     );
   });
 
-  it('computes shorter refresh windows for high-volatility domains', () => {
+  it('computes refresh windows from requested freshness', () => {
     const policy = computeRefreshPolicy({
       publishedAt: '2026-05-01T00:00:00.000Z',
       retrievedAt: '2026-05-02T00:00:00.000Z',
-      freshnessIntent: 'low',
+      freshnessIntent: 'high',
       sourceUrl: 'https://market.example.com/quote',
     });
 
-    expect(policy.refreshReason).toBe('volatile source domain');
-    expect(policy.refreshAfter).toBe('2026-05-05T00:00:00.000Z');
+    expect(policy.refreshReason).toBe('high freshness retrieval intent');
+    expect(policy.refreshAfter).toBe('2026-05-09T00:00:00.000Z');
   });
 
   it('penalizes repeated domains during diversity selection', () => {

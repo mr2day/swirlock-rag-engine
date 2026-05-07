@@ -167,34 +167,8 @@ export function scoreSourceQuality(input: {
   sourceUrl: string | null;
   sourceTitle: string;
 }): number {
-  const domain = getSourceDomain(input.sourceUrl);
-  let score = 0.55;
-
-  if (!domain) {
-    return score;
-  }
-
-  if (domain.endsWith('.gov') || domain.endsWith('.edu')) {
-    score += 0.2;
-  }
-
-  if (
-    /\b(docs|developer|research|standards|spec|official|manual)\b/i.test(
-      `${domain} ${input.sourceTitle}`,
-    )
-  ) {
-    score += 0.12;
-  }
-
-  if (/\b(wiki|forum|reddit|medium|substack)\b/i.test(domain)) {
-    score -= 0.08;
-  }
-
-  if (/\b(download|login|signup|tracking|affiliate)\b/i.test(domain)) {
-    score -= 0.15;
-  }
-
-  return roundScore(score);
+  void input;
+  return 0.55;
 }
 
 export function computeRefreshPolicy(input: {
@@ -205,13 +179,12 @@ export function computeRefreshPolicy(input: {
 }): RefreshPolicy {
   const retrievedAtMs = Date.parse(input.retrievedAt);
   const base = Number.isFinite(retrievedAtMs) ? retrievedAtMs : Date.now();
-  const domain = getSourceDomain(input.sourceUrl) ?? '';
   const publishedAtMs = Date.parse(input.publishedAt ?? '');
   const ageDays = Number.isFinite(publishedAtMs)
     ? Math.max(0, (base - publishedAtMs) / (1000 * 60 * 60 * 24))
     : null;
   let refreshDays = 90;
-  let refreshReason = 'low volatility source';
+  let refreshReason = 'low freshness retrieval intent';
 
   if (input.freshnessIntent === 'realtime') {
     refreshDays = 1;
@@ -222,11 +195,6 @@ export function computeRefreshPolicy(input: {
   } else if (input.freshnessIntent === 'medium') {
     refreshDays = 30;
     refreshReason = 'medium freshness retrieval intent';
-  }
-
-  if (/\b(news|market|weather|sports|finance|stock|quote)\b/i.test(domain)) {
-    refreshDays = Math.min(refreshDays, 3);
-    refreshReason = 'volatile source domain';
   }
 
   if (ageDays !== null && ageDays > 365) {
@@ -288,8 +256,4 @@ export function limitText(value: string, maxLength: number): string {
   }
 
   return `${normalized.slice(0, maxLength - 3).trimEnd()}...`;
-}
-
-function roundScore(value: number): number {
-  return Math.max(0, Math.min(1, Number(value.toFixed(4))));
 }
