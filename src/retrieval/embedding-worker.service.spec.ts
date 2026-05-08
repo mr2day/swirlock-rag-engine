@@ -14,24 +14,26 @@ describe('EmbeddingWorkerService', () => {
       },
     ]);
     const writeChunkEmbedding = jest.fn().mockResolvedValue(undefined);
-    const embed = jest.fn().mockResolvedValue({
-      result: {
-        modelId: 'test-embedding-model',
-        dimensions: 3,
-        normalized: true,
-        inputType: 'document',
-        embeddings: [[0.1, 0.2, 0.3]],
-        durationMs: 4,
-      },
-      diagnostics: {
-        attempted: true,
-        succeeded: true,
-        durationMs: 4,
-        attempts: 1,
-        inputCount: 1,
-        inputType: 'document',
-      },
-    });
+    const embed: jest.MockedFunction<EmbeddingServiceService['embed']> = jest
+      .fn()
+      .mockResolvedValue({
+        result: {
+          modelId: 'test-embedding-model',
+          dimensions: 3,
+          normalized: true,
+          inputType: 'document',
+          embeddings: [[0.1, 0.2, 0.3]],
+          durationMs: 4,
+        },
+        diagnostics: {
+          attempted: true,
+          succeeded: true,
+          durationMs: 4,
+          attempts: 1,
+          inputCount: 1,
+          inputType: 'document',
+        },
+      });
     const service = new EmbeddingWorkerService(
       {
         get: jest.fn((key: string) =>
@@ -53,7 +55,7 @@ describe('EmbeddingWorkerService', () => {
       failed: 0,
     });
 
-    const texts = embed.mock.calls[0]?.[1] as string[];
+    const texts = embed.mock.calls[0]?.[1] ?? [];
     expect(texts[0]?.split(/\s+/).length).toBeLessThanOrEqual(320);
     expect(texts[0]?.length).toBeLessThanOrEqual(1400);
     expect(writeChunkEmbedding).toHaveBeenCalledWith(

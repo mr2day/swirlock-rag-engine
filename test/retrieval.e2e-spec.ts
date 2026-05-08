@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
+import type { Server as HttpServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import WebSocket from 'ws';
 import { App } from 'supertest/types';
@@ -92,7 +93,9 @@ describe('RetrievalController (e2e)', () => {
   });
 
   it('/v2/retrieval/evidence/stream (WebSocket)', async () => {
-    const address = app.getHttpServer().address() as AddressInfo;
+    const address = (
+      app.getHttpServer() as HttpServer
+    ).address() as AddressInfo;
     const ws = new WebSocket(
       `ws://127.0.0.1:${address.port}/v2/retrieval/evidence/stream`,
       { headers: { 'x-correlation-id': 'e2e-retrieval-ws' } },

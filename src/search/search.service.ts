@@ -307,7 +307,7 @@ export class SearchService {
       filterEmptyResults: true,
     });
 
-    return response as ExaExtractSearchResponse;
+    return response;
   }
 
   private getExaClient(): Exa {

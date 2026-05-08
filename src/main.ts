@@ -1,5 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
+import type { Server as HttpServer } from 'node:http';
 import { AppModule } from './app.module';
 import { RetrievalService } from './retrieval/retrieval.service';
 import { attachRetrievalStreamServer } from './retrieval/retrieval-stream-ws';
@@ -15,6 +16,9 @@ async function bootstrap() {
   }
 
   await app.listen(port, host);
-  attachRetrievalStreamServer(app.getHttpServer(), app.get(RetrievalService));
+  attachRetrievalStreamServer(
+    app.getHttpServer() as HttpServer,
+    app.get(RetrievalService),
+  );
 }
 void bootstrap();

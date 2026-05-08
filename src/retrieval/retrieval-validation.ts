@@ -115,7 +115,9 @@ function validateOptionalUserLocation(value: unknown): UserLocation | null {
   }
 
   if (typeof value !== 'object' || Array.isArray(value)) {
-    throw validationError('query.userLocation must be an object when provided.');
+    throw validationError(
+      'query.userLocation must be an object when provided.',
+    );
   }
 
   const record = value as Record<string, unknown>;
@@ -123,16 +125,24 @@ function validateOptionalUserLocation(value: unknown): UserLocation | null {
   const longitude = record.longitude;
 
   if (typeof latitude !== 'number' || !Number.isFinite(latitude)) {
-    throw validationError('query.userLocation.latitude must be a finite number.');
+    throw validationError(
+      'query.userLocation.latitude must be a finite number.',
+    );
   }
   if (latitude < -90 || latitude > 90) {
-    throw validationError('query.userLocation.latitude must be between -90 and 90.');
+    throw validationError(
+      'query.userLocation.latitude must be between -90 and 90.',
+    );
   }
   if (typeof longitude !== 'number' || !Number.isFinite(longitude)) {
-    throw validationError('query.userLocation.longitude must be a finite number.');
+    throw validationError(
+      'query.userLocation.longitude must be a finite number.',
+    );
   }
   if (longitude < -180 || longitude > 180) {
-    throw validationError('query.userLocation.longitude must be between -180 and 180.');
+    throw validationError(
+      'query.userLocation.longitude must be between -180 and 180.',
+    );
   }
 
   const result: UserLocation = { latitude, longitude };
