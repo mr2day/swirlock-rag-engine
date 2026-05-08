@@ -1,6 +1,7 @@
 import type { ConfigService } from '@nestjs/config';
 import type { SearchService } from '../search/search.service';
 import type { ExtractedDocument } from '../search/search.types';
+import type { WikipediaSearchService } from '../search/wikipedia-search.service';
 import type { EmbeddingServiceService } from './embedding-service.service';
 import type { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
@@ -107,6 +108,19 @@ describe('RetrievalService', () => {
     const searchService = {
       searchThenExtract,
     } as unknown as jest.Mocked<SearchService>;
+    const wikipediaSearchThenExtract = jest.fn();
+    const wikipediaGetConfiguration = jest.fn().mockReturnValue({
+      enabled: false,
+      baseUrl: 'https://en.wikipedia.org',
+      userAgent: 'swirlock-rag-engine-test',
+      searchLimit: 0,
+      extractLimit: 0,
+      timeoutMs: 15000,
+    });
+    const wikipediaSearchService = {
+      getConfiguration: wikipediaGetConfiguration,
+      searchThenExtract: wikipediaSearchThenExtract,
+    } as unknown as jest.Mocked<WikipediaSearchService>;
     const knowledgeStore = {
       storePath: 'C:/tmp/knowledge-store.json',
       storeKind: 'json_file',
@@ -130,6 +144,7 @@ describe('RetrievalService', () => {
     const service = new RetrievalService(
       configService,
       searchService,
+      wikipediaSearchService,
       knowledgeStore,
       new RetrievalPolicyService(),
       utilityLlmService,
@@ -139,6 +154,8 @@ describe('RetrievalService', () => {
     return {
       service,
       searchThenExtract,
+      wikipediaSearchThenExtract,
+      wikipediaGetConfiguration,
       knowledgeSearch,
       knowledgeSearchHybrid,
       upsertExtractedDocuments,

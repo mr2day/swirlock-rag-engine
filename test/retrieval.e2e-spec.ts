@@ -11,6 +11,7 @@ import { EmbeddingWorkerService } from '../src/retrieval/embedding-worker.servic
 import { RetrievalService } from '../src/retrieval/retrieval.service';
 import { attachRetrievalStreamServer } from '../src/retrieval/retrieval-stream-ws';
 import { UtilityLlmService } from '../src/retrieval/utility-llm.service';
+import { WikipediaSearchService } from '../src/search/wikipedia-search.service';
 
 describe('RetrievalController (e2e)', () => {
   let app: INestApplication<App>;
@@ -84,6 +85,28 @@ describe('RetrievalController (e2e)', () => {
       .overrideProvider(EmbeddingWorkerService)
       .useValue({
         drainOnce: jest.fn().mockResolvedValue({ processed: 0, failed: 0 }),
+      })
+      .overrideProvider(WikipediaSearchService)
+      .useValue({
+        getConfiguration: jest.fn().mockReturnValue({
+          enabled: false,
+          baseUrl: 'https://en.wikipedia.org',
+          userAgent: 'swirlock-rag-engine-test',
+          searchLimit: 0,
+          extractLimit: 0,
+          timeoutMs: 15000,
+        }),
+        searchThenExtract: jest.fn().mockResolvedValue({
+          query: '',
+          searchLimit: 0,
+          extractLimit: 0,
+          totalLatencyMs: 0,
+          completedAt: new Date().toISOString(),
+          status: 'ok',
+          error: 'Wikipedia provider is disabled.',
+          search: null,
+          extract: null,
+        }),
       })
       .compile();
 

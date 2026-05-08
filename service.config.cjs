@@ -34,6 +34,15 @@ const runtime = {
     initialBackoffMs: 5000,
     maxBackoffMs: 600000,
   },
+  wikipedia: {
+    enabled: true,
+    baseUrl: 'https://en.wikipedia.org',
+    userAgent:
+      'swirlock-rag-engine/1.0 (https://github.com/mr2day/swirlock-rag-engine)',
+    searchLimit: 5,
+    extractLimit: 3,
+    timeoutMs: 15000,
+  },
 };
 
 function buildEnv(source = process.env) {
@@ -95,6 +104,18 @@ function buildEnv(source = process.env) {
     EMBEDDING_WORKER_MAX_BACKOFF_MS:
       source.EMBEDDING_WORKER_MAX_BACKOFF_MS ||
       String(runtime.embeddingWorker.maxBackoffMs),
+    WIKIPEDIA_SEARCH_ENABLED:
+      source.WIKIPEDIA_SEARCH_ENABLED || String(runtime.wikipedia.enabled),
+    WIKIPEDIA_BASE_URL:
+      source.WIKIPEDIA_BASE_URL || runtime.wikipedia.baseUrl,
+    WIKIPEDIA_USER_AGENT:
+      source.WIKIPEDIA_USER_AGENT || runtime.wikipedia.userAgent,
+    WIKIPEDIA_SEARCH_LIMIT:
+      source.WIKIPEDIA_SEARCH_LIMIT || String(runtime.wikipedia.searchLimit),
+    WIKIPEDIA_EXTRACT_LIMIT:
+      source.WIKIPEDIA_EXTRACT_LIMIT || String(runtime.wikipedia.extractLimit),
+    WIKIPEDIA_TIMEOUT_MS:
+      source.WIKIPEDIA_TIMEOUT_MS || String(runtime.wikipedia.timeoutMs),
   };
 
   if (source.RAG_DATABASE_URL) {

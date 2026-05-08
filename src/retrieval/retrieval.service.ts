@@ -3,9 +3,11 @@ import { ConfigService } from '@nestjs/config';
 import { createUuidV7 } from '../common/ids';
 import { serviceRuntimeConfig } from '../config/service-config';
 import { SearchService } from '../search/search.service';
+import { WikipediaSearchService } from '../search/wikipedia-search.service';
 import type {
   ExtractedDocument,
   NormalizedSearchResult,
+  SearchExtractProgressHandler,
 } from '../search/search.types';
 import { EmbeddingServiceService } from './embedding-service.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
@@ -94,6 +96,7 @@ export class RetrievalService {
   constructor(
     private readonly configService: ConfigService,
     private readonly searchService: SearchService,
+    private readonly wikipediaSearchService: WikipediaSearchService,
     private readonly knowledgeStore: KnowledgeStoreService,
     private readonly retrievalPolicy: RetrievalPolicyService,
     private readonly utilityLlmService: UtilityLlmService,
@@ -436,53 +439,87 @@ export class RetrievalService {
       ),
       request.query.maxEvidenceChunks,
     );
-    const inspection = await this.searchService.searchThenExtract(
-      effectiveQuery,
-      searchLimit,
-      extractLimit,
-      async (event) => {
-        if (event.type === 'search_started') {
-          await publish('live.search.started', {
-            queryText: event.query,
-            searchLimit: event.searchLimit,
-          });
-        } else if (event.type === 'search_completed') {
-          await publish('live.search.completed', {
-            queryText: event.query,
-            latencyMs: event.search.latencyMs,
-            resultCount: event.search.resultCount,
-            requestId: event.search.requestId,
-            sources: event.search.topResults.map((result) =>
-              this.mapSearchResultToStreamSource(result),
-            ),
-          });
-        } else if (event.type === 'extract_started') {
-          await publish('live.extract.started', {
-            queryText: event.query,
-            urls: event.urls,
-            extractLimit: event.extractLimit,
-          });
-        } else if (event.type === 'extract_completed') {
-          await publish('live.extract.completed', {
-            queryText: event.query,
-            latencyMs: event.extract.latencyMs,
-            documentCount: event.extract.documentCount,
-            totalCharacters: event.extract.totalCharacters,
-            failedSources: event.extract.failedSources,
-            sources: event.extract.documents.map((document) =>
-              this.mapExtractedDocumentToStreamSource(document),
-            ),
-          });
-        }
-      },
+    const exaProgress = this.buildLiveProgressHandler(publish, 'exa');
+    const wikipediaProgress = this.buildLiveProgressHandler(
+      publish,
+      'wikipedia',
     );
 
-    if (inspection.status !== 'ok') {
+    const wikipediaConfig = this.wikipediaSearchService.getConfiguration();
+    const wikipediaSearchLimit = Math.min(
+      wikipediaConfig.searchLimit,
+      request.query.maxEvidenceChunks,
+    );
+    const wikipediaExtractLimit = Math.min(
+      wikipediaConfig.extractLimit,
+      request.query.maxEvidenceChunks,
+    );
+
+    const [exaSettled, wikipediaSettled] = await Promise.allSettled([
+      this.searchService.searchThenExtract(
+        effectiveQuery,
+        searchLimit,
+        extractLimit,
+        exaProgress,
+      ),
+      wikipediaConfig.enabled
+        ? this.wikipediaSearchService.searchThenExtract(
+            effectiveQuery,
+            wikipediaSearchLimit,
+            wikipediaExtractLimit,
+            wikipediaProgress,
+          )
+        : Promise.resolve(null),
+    ]);
+
+    const exaInspection =
+      exaSettled.status === 'fulfilled' ? exaSettled.value : null;
+    const wikipediaInspection =
+      wikipediaSettled.status === 'fulfilled' ? wikipediaSettled.value : null;
+
+    const liveErrors: string[] = [];
+    if (exaSettled.status === 'rejected') {
+      const message =
+        exaSettled.reason instanceof Error
+          ? exaSettled.reason.message
+          : String(exaSettled.reason);
+      liveErrors.push(`Exa live retrieval failed: ${message}`);
+    } else if (exaInspection && exaInspection.status !== 'ok') {
+      liveErrors.push(
+        exaInspection.error
+          ? `Exa live retrieval failed: ${exaInspection.error}`
+          : 'Exa live retrieval failed.',
+      );
+    }
+    if (wikipediaSettled.status === 'rejected') {
+      const message =
+        wikipediaSettled.reason instanceof Error
+          ? wikipediaSettled.reason.message
+          : String(wikipediaSettled.reason);
+      liveErrors.push(`Wikipedia live retrieval failed: ${message}`);
+    } else if (
+      wikipediaInspection &&
+      wikipediaInspection.status !== 'ok' &&
+      wikipediaInspection.error &&
+      wikipediaInspection.error !== 'Wikipedia provider is disabled.'
+    ) {
+      liveErrors.push(
+        `Wikipedia live retrieval failed: ${wikipediaInspection.error}`,
+      );
+    }
+
+    const exaDocuments = exaInspection?.extract?.documents ?? [];
+    const wikipediaDocuments = wikipediaInspection?.extract?.documents ?? [];
+    const documents = this.mergeLiveDocuments(wikipediaDocuments, exaDocuments);
+
+    if (
+      documents.length === 0 &&
+      exaInspection?.status !== 'ok' &&
+      (wikipediaInspection?.status !== 'ok' || wikipediaDocuments.length === 0)
+    ) {
       return {
         chunks: [],
-        error: inspection.error
-          ? `Live web retrieval failed: ${inspection.error}`
-          : 'Live web retrieval failed.',
+        error: liveErrors.length > 0 ? liveErrors.join(' | ') : null,
         warnings: [],
         utilityDiagnostics: [],
         usedExtractionSummaries: false,
@@ -490,8 +527,6 @@ export class RetrievalService {
         documentRetention: null,
       };
     }
-
-    const documents = inspection.extract?.documents ?? [];
     const warnings: string[] = [];
     const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
     const shouldUseExtractionSummaries = !this.shouldSkipExtractionSummaries(
@@ -569,13 +604,87 @@ export class RetrievalService {
           extractionSummaries.summariesByUrl.get(document.url),
         ),
       ),
-      error: null,
+      error: liveErrors.length > 0 ? liveErrors.join(' | ') : null,
       warnings,
       utilityDiagnostics,
       usedExtractionSummaries: extractionSummaries.summariesByUrl.size > 0,
       usedDocumentRetention: documentRetention.retentionByUrl.size > 0,
       documentRetention: retentionSummary,
     };
+  }
+
+  private buildLiveProgressHandler(
+    publish: RetrievalProgressPublisher,
+    provider: 'exa' | 'wikipedia',
+  ): SearchExtractProgressHandler {
+    return async (event) => {
+      if (event.type === 'search_started') {
+        await publish('live.search.started', {
+          provider,
+          queryText: event.query,
+          searchLimit: event.searchLimit,
+        });
+      } else if (event.type === 'search_completed') {
+        await publish('live.search.completed', {
+          provider,
+          queryText: event.query,
+          latencyMs: event.search.latencyMs,
+          resultCount: event.search.resultCount,
+          requestId: event.search.requestId,
+          sources: event.search.topResults.map((result) =>
+            this.mapSearchResultToStreamSource(result),
+          ),
+        });
+      } else if (event.type === 'extract_started') {
+        await publish('live.extract.started', {
+          provider,
+          queryText: event.query,
+          urls: event.urls,
+          extractLimit: event.extractLimit,
+        });
+      } else if (event.type === 'extract_completed') {
+        await publish('live.extract.completed', {
+          provider,
+          queryText: event.query,
+          latencyMs: event.extract.latencyMs,
+          documentCount: event.extract.documentCount,
+          totalCharacters: event.extract.totalCharacters,
+          failedSources: event.extract.failedSources,
+          sources: event.extract.documents.map((document) =>
+            this.mapExtractedDocumentToStreamSource(document),
+          ),
+        });
+      }
+    };
+  }
+
+  private mergeLiveDocuments(
+    primary: ExtractedDocument[],
+    secondary: ExtractedDocument[],
+  ): ExtractedDocument[] {
+    const seen = new Set<string>();
+    const out: ExtractedDocument[] = [];
+    const push = (document: ExtractedDocument): void => {
+      const key = this.normalizeDocumentKey(document.url);
+      if (key && seen.has(key)) return;
+      if (key) seen.add(key);
+      out.push(document);
+    };
+    for (const document of primary) push(document);
+    for (const document of secondary) push(document);
+    return out;
+  }
+
+  private normalizeDocumentKey(url: string): string {
+    if (!url) return '';
+    try {
+      const parsed = new URL(url);
+      const host = parsed.host.toLowerCase().replace(/^www\./, '');
+      const path = parsed.pathname.replace(/\/+$/, '').toLowerCase();
+      return `${host}${path}`;
+    } catch {
+      return url.toLowerCase();
+    }
   }
 
   private async summarizeLiveDocuments(
