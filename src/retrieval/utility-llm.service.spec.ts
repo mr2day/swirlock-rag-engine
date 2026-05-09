@@ -125,7 +125,7 @@ describe('UtilityLlmService', () => {
     expect(result.usedForQuery).toBe(true);
     expect(result.diagnostics[0]?.succeeded).toBe(true);
     expect(FakeWebSocket.instances[0]?.url).toBe(
-      'ws://127.0.0.1:3213/v4/model',
+      'ws://127.0.0.1:3213/v5/model',
     );
   });
 

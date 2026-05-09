@@ -928,7 +928,7 @@ export class UtilityLlmService {
   }
 
   private get streamUrl(): string {
-    const url = new URL('/v4/model', this.hostUrl);
+    const url = new URL('/v5/model', this.hostUrl);
 
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 
