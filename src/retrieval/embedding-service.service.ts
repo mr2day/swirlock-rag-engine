@@ -512,7 +512,7 @@ export class EmbeddingServiceService {
       this.url
         .replace(/^http:/i, 'ws:')
         .replace(/^https:/i, 'wss:')
-        .replace(/\/$/, '') + '/v4/embeddings'
+        .replace(/\/$/, '') + '/v5/embeddings'
     );
   }
 }
