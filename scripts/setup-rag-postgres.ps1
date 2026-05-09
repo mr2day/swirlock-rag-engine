@@ -62,7 +62,11 @@ function Write-EnvLocal([string] $DatabaseUrl) {
   $lines = @()
 
   if (Test-Path $envPath) {
-    $lines = Get-Content $envPath | Where-Object { $_ -notmatch "^RAG_DATABASE_URL=" }
+    # @(...) forces array context so a single surviving line does not collapse
+    # to a scalar string, which would make the += below do string concatenation
+    # instead of array append and produce a one-line file with both keys jammed
+    # together.
+    $lines = @(Get-Content $envPath | Where-Object { $_ -notmatch "^RAG_DATABASE_URL=" })
   }
 
   $lines += "RAG_DATABASE_URL=$DatabaseUrl"
