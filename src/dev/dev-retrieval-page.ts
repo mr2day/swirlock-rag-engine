@@ -269,7 +269,7 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
           <div>
             <h1>Swirlock RAG Engine — v4 Retrieval Test</h1>
             <p class="subtitle">
-              Drives <code>ws://&lt;host&gt;/v5/retrieval</code> with the v4 envelope. Streams every progress event back live.
+              Drives <code>ws://&lt;host&gt;/v5/retrieval</code> with the v5 envelope. Streams every progress event back live.
             </p>
           </div>
           <span id="connection-badge" class="badge"><span class="dot"></span><span id="connection-text">Idle</span></span>
