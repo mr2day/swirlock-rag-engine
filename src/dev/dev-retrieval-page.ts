@@ -300,7 +300,7 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
             <div class="field" style="flex: 1 1 auto;">
               <span>Allowed modes</span>
               <div class="checkboxes">
-                <label><input type="checkbox" id="mode-local" checked /> local_rag</label>
+                <label><input type="checkbox" id="mode-local" /> local_rag</label>
                 <label><input type="checkbox" id="mode-live" checked /> live_web</label>
                 <label><input type="checkbox" id="skip-summaries" /> skipUtilitySummaries</label>
               </div>
