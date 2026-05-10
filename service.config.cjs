@@ -35,7 +35,7 @@ const runtime = {
     maxBackoffMs: 600000,
   },
   wikipedia: {
-    enabled: true,
+    enabled: false,
     baseUrl: 'https://en.wikipedia.org',
     userAgent:
       'swirlock-rag-engine/1.0 (https://github.com/mr2day/swirlock-rag-engine)',
