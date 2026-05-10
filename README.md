@@ -115,7 +115,7 @@ PM2 receives the full env from `service.config.cjs::env` via
 ### WebSocket (the ecosystem contract)
 
 ```text
-WS /v4/retrieval
+WS /v5/retrieval
 ```
 
 Client message types:
@@ -157,8 +157,8 @@ deployment-local diagnostics; do not depend on them from other services.
 
 The RAG Engine keeps persistent WebSockets to:
 
-- Swirlock LLM Host: `/v4/model`
-- Swirlock Embedding Service: `/v4/embeddings`
+- Swirlock LLM Host: `/v5/model`
+- Swirlock Embedding Service: `/v5/embeddings`
 
 It also calls Exa's HTTPS API directly when live web search is enabled and
 an `EXA_API_KEY` is present.
@@ -186,7 +186,7 @@ and is not the live store. The live store is PostgreSQL.
 
 ```powershell
 # WS health (canonical):
-# Send { "type": "health.get", "correlationId": "..." } over /v4/retrieval
+# Send { "type": "health.get", "correlationId": "..." } over /v5/retrieval
 
 # Local diagnostic (HTTP, dev only):
 Invoke-RestMethod http://127.0.0.1:3001/dev/health   # if exposed
@@ -204,14 +204,10 @@ npm run lint
 
 ## Contract version
 
-This service currently serves Swirlock Contracts **v4** (endpoint
-`/v4/retrieval` and the `/v4/model` + `/v4/embeddings` upstream sockets).
-
-The ecosystem's current target is **v5** — see
-`swirlock-chatbot-contracts/docs/versions/v5/apps/rag-engine.md`. The v5
-endpoint path is `/v5/retrieval`; the wire format and message types are
-identical to v4. This service has not yet been bumped to serve `/v5/retrieval`;
-that is a planned change once the orchestrator refactor for v5 is underway.
+This service serves Swirlock Contracts **v5** (endpoint
+`/v5/retrieval` and the `/v5/model` + `/v5/embeddings` upstream sockets).
+The wire format and message types are identical to v4 — only the
+endpoint paths changed.
 
 ## Companion Docs
 

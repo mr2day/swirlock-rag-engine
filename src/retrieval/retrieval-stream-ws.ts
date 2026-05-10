@@ -4,7 +4,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 import { RetrievalService } from './retrieval.service';
 import type { RetrievalStreamEvent } from './retrieval.types';
 
-const RETRIEVAL_STREAM_PATH = '/v4/retrieval';
+const RETRIEVAL_STREAM_PATH = '/v5/retrieval';
 
 interface V4Envelope {
   type: string;

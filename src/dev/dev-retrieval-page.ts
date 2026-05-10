@@ -269,7 +269,7 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
           <div>
             <h1>Swirlock RAG Engine — v4 Retrieval Test</h1>
             <p class="subtitle">
-              Drives <code>ws://&lt;host&gt;/v4/retrieval</code> with the v4 envelope. Streams every progress event back live.
+              Drives <code>ws://&lt;host&gt;/v5/retrieval</code> with the v4 envelope. Streams every progress event back live.
             </p>
           </div>
           <span id="connection-badge" class="badge"><span class="dot"></span><span id="connection-text">Idle</span></span>
@@ -430,7 +430,7 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
               socket.addEventListener('error', function (err) { reject(err); }, { once: true });
             });
           }
-          const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/v4/retrieval';
+          const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/v5/retrieval';
           setBadge('connecting', 'Connecting…');
           socket = new WebSocket(wsUrl);
           socket.addEventListener('open', function () { setBadge('connected', 'Connected'); });
