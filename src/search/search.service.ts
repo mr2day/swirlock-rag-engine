@@ -279,13 +279,12 @@ export class SearchService {
 
     return exaClient.search(query, {
       numResults,
-      type: 'auto',
+      type: 'keyword',
       contents: {
         highlights: {
           query,
           maxCharacters: 420,
         },
-        filterEmptyResults: true,
       },
     });
   }
