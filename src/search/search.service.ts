@@ -277,9 +277,17 @@ export class SearchService {
   ): Promise<ExaHighlightsSearchResponse> {
     const exaClient = this.getExaClient();
 
+    // 'auto' lets Exa route between neural (semantic vector) and keyword
+    // (BM25) on a per-query basis. Plain 'keyword' is essentially Ctrl+F
+    // over the index — it misses articles that talk about the entity in
+    // different wording. Observed in production: a Romanian-language
+    // person-and-career query under 'keyword' returned a name-similar
+    // but topic-mismatched article (Florentina Ioniță instead of
+    // Florentina Bolojan) and missed the dozen Romanian-press pieces
+    // that an auto/neural search surfaces immediately.
     return exaClient.search(query, {
       numResults,
-      type: 'keyword',
+      type: 'auto',
       contents: {
         highlights: {
           query,
