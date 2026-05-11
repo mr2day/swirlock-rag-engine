@@ -705,10 +705,7 @@ export class UtilityLlmService {
     documents: Array<{ excerpt: string; content: string }>,
   ): string {
     const lines: string[] = [
-      'Summarize each document below.',
-      'Write each summary in the SAME language as the document itself — do not translate. If the document is in Romanian, the summary is in Romanian; if Spanish, Spanish; and so on.',
-      'Be generous with the details: include every specific fact, date, name, role, or quote in the source that is relevant to the retrieval query. Do not compress rich source material into a one-line summary.',
-      'Keep summaries factual and grounded only in the document text.',
+      'Summarize each document below. Keep summaries factual and grounded only in the document text.',
       'Output JSON only, no prose, no code fences:',
       '{"summaries":[{"index":<document number>,"summary":"<summary text>"}]}',
       '',
