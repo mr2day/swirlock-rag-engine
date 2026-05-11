@@ -9,8 +9,8 @@ const runtime = {
   port: 3001,
   knowledgeStorePath: path.join(rootDir, 'data', 'knowledge-store.json'),
   maxEvidenceChunks: 12,
-  liveSearchLimit: 6,
-  liveExtractLimit: 4,
+  liveSearchLimit: 10,
+  liveExtractLimit: 6,
   utilityLlm: {
     enabled: true,
     hostUrl: 'http://127.0.0.1:3213',
