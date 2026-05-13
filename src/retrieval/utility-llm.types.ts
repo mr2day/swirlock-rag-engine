@@ -70,33 +70,3 @@ export interface UtilityLlmExtractionSummaries {
   diagnostics: UtilityLlmCallDiagnostics[];
 }
 
-export type UtilityLlmDocumentRetentionClass =
-  | 'durable'
-  | 'ephemeral'
-  | 'reject';
-
-export interface UtilityLlmDocumentRetentionInput {
-  correlationId: string;
-  queryText: string;
-  intent: string;
-  freshness: string;
-  documents: Array<{
-    title: string;
-    url: string;
-    publishedAt: string | null;
-    excerpt: string;
-    content: string;
-  }>;
-}
-
-export interface UtilityLlmDocumentRetentionDecision {
-  retentionByUrl: Map<
-    string,
-    {
-      retention: UtilityLlmDocumentRetentionClass;
-      reason: string;
-    }
-  >;
-  warnings: string[];
-  diagnostics: UtilityLlmCallDiagnostics[];
-}

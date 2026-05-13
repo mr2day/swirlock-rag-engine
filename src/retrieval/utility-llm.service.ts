@@ -4,14 +4,13 @@ import { serviceRuntimeConfig } from '../config/service-config';
 import type { ImageInputPart } from './retrieval.types';
 import type {
   UtilityLlmCallDiagnostics,
-  UtilityLlmDocumentRetentionDecision,
-  UtilityLlmDocumentRetentionInput,
   UtilityLlmExtractionSummaries,
   UtilityLlmExtractionSummariesInput,
   UtilityLlmRetrievalSupport,
   UtilityLlmRetrievalSupportInput,
   UtilityLlmStatus,
 } from './utility-llm.types';
+import { cleanContent } from '../search/content-cleaner';
 
 type StreamEvent = { correlationId?: string } & (
   | { type: 'accepted' | 'started'; payload?: Record<string, unknown> }
@@ -267,57 +266,6 @@ export class UtilityLlmService {
     };
   }
 
-  async decideDocumentRetention(
-    input: UtilityLlmDocumentRetentionInput,
-  ): Promise<UtilityLlmDocumentRetentionDecision> {
-    if (!this.enabled || input.documents.length === 0) {
-      return {
-        retentionByUrl: new Map(),
-        warnings: [],
-        diagnostics: [
-          this.skippedDiagnostic(
-            'document_retention',
-            this.enabled
-              ? 'No extracted documents were available.'
-              : 'Utility LLM Host support is disabled.',
-          ),
-        ],
-      };
-    }
-
-    const documents = input.documents.slice(0, 6);
-    const result = await this.safeInferJson(
-      {
-        correlationId: input.correlationId,
-        task: 'document_retention',
-        prompt: this.buildDocumentRetentionPrompt(
-          input.queryText,
-          input.intent,
-          input.freshness,
-          documents,
-        ),
-        responseFormat: 'json',
-        temperature: 0,
-        priority: this.priorityForTask('background'),
-        thinking: false,
-      },
-      (value) => this.normalizeDocumentRetentionJson(value, documents),
-    );
-
-    if (!result.value) {
-      return {
-        retentionByUrl: new Map(),
-        warnings: [result.warning],
-        diagnostics: [result.diagnostics],
-      };
-    }
-
-    return {
-      retentionByUrl: result.value,
-      warnings: [],
-      diagnostics: [result.diagnostics],
-    };
-  }
 
   private async safeInferJson<T>(
     options: StreamInferOptions,
@@ -715,65 +663,17 @@ export class UtilityLlmService {
     ];
     documents.forEach((document, position) => {
       lines.push(`Document ${position + 1}:`);
-      lines.push(limitText(document.excerpt || document.content, 700));
+      // Strip boilerplate (cookie banners, share widgets, citation
+      // markers, etc.) before truncating, so each char in the
+      // budget carries actual signal. Cap at ~2000 tokens
+      // (≈7000 chars at our 3.5 chars/token heuristic).
+      const cleaned = cleanContent(document.excerpt || document.content || '');
+      lines.push(limitText(cleaned, 7000));
       lines.push('');
     });
     return lines.join('\n');
   }
 
-  private buildDocumentRetentionPrompt(
-    queryText: string,
-    intent: string,
-    freshness: string,
-    documents: Array<{
-      title: string;
-      url: string;
-      publishedAt: string | null;
-      excerpt: string;
-      content: string;
-    }>,
-  ): string {
-    const lines: string[] = [
-      'You are durable-memory retention support for the Swirlock RAG Engine.',
-      'Return JSON only. Do not answer the user.',
-      'The software will not use deterministic keyword, domain, or language rules to decide what content is durable. Your judgment is the retention signal.',
-      '',
-      'Task:',
-      'For each extracted live document, decide whether it should be written to the durable knowledge store or used only for this retrieval turn.',
-      '',
-      'Schema:',
-      '{"documents":[{"index":<document number>,"retention":"durable|ephemeral|reject","reason":"<short reason>"}],"overallReason":"<short reason>"}',
-      '',
-      'Meanings:',
-      '- durable: stable knowledge that can remain useful beyond the current conversation or date.',
-      '- ephemeral: time-bound, situational, live, forecast, status, ranking, price, availability, or otherwise short-lived information.',
-      '- reject: off-topic, unreliable, unsafe to store, private, malformed, or too low-value for memory.',
-      '',
-      'Rules:',
-      '- Judge from the query, intent, freshness, and document text, regardless of language.',
-      '- If a document mixes durable and ephemeral facts, choose the retention class for the main useful content.',
-      '- Keep reasons concise and grounded in the document.',
-      '- Use every document index exactly once.',
-      '',
-      `Retrieval query: ${queryText}`,
-      `Intent: ${intent}`,
-      `Freshness requested by caller: ${freshness}`,
-      '',
-    ];
-
-    documents.forEach((document, position) => {
-      lines.push(`Document ${position + 1}:`);
-      lines.push(`Title: ${limitText(document.title, 180)}`);
-      lines.push(`URL: ${document.url}`);
-      lines.push(`Published at: ${document.publishedAt ?? '(unknown)'}`);
-      lines.push(
-        limitText(document.excerpt || document.content || '(empty)', 900),
-      );
-      lines.push('');
-    });
-
-    return lines.join('\n');
-  }
 
   private normalizeRetrievalSupportJson(value: unknown): {
     queryText: string | null;
@@ -831,47 +731,6 @@ export class UtilityLlmService {
     }
 
     return summariesByUrl;
-  }
-
-  private normalizeDocumentRetentionJson(
-    value: unknown,
-    documents: Array<{ url: string }>,
-  ): UtilityLlmDocumentRetentionDecision['retentionByUrl'] | null {
-    if (!isRecord(value) || !Array.isArray(value.documents)) {
-      return null;
-    }
-
-    const retentionByUrl: UtilityLlmDocumentRetentionDecision['retentionByUrl'] =
-      new Map();
-
-    for (const item of value.documents) {
-      if (!isRecord(item)) {
-        continue;
-      }
-
-      const indexValue =
-        typeof item.index === 'number'
-          ? item.index
-          : Number.parseInt(String(item.index), 10);
-      if (!Number.isInteger(indexValue)) {
-        continue;
-      }
-
-      const document = documents[indexValue - 1];
-      const retention =
-        item.retention === 'durable' ||
-        item.retention === 'ephemeral' ||
-        item.retention === 'reject'
-          ? item.retention
-          : null;
-      const reason = normalizeOptionalString(item.reason, 400);
-
-      if (document && retention && reason) {
-        retentionByUrl.set(document.url, { retention, reason });
-      }
-    }
-
-    return retentionByUrl;
   }
 
   private priorityForTask(kind: 'interactive' | 'background'): number {

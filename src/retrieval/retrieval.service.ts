@@ -30,10 +30,7 @@ import type {
   ValidatedRetrieveEvidenceRequest,
 } from './retrieval.types';
 import type { EmbeddingCallDiagnostics } from './embedding-service.types';
-import type {
-  UtilityLlmCallDiagnostics,
-  UtilityLlmDocumentRetentionDecision,
-} from './utility-llm.types';
+import type { UtilityLlmCallDiagnostics } from './utility-llm.types';
 
 interface LiveRetrievalResult {
   chunks: EvidenceChunk[];
@@ -41,8 +38,6 @@ interface LiveRetrievalResult {
   warnings: string[];
   utilityDiagnostics: UtilityLlmCallDiagnostics[];
   usedExtractionSummaries: boolean;
-  usedDocumentRetention: boolean;
-  documentRetention: LiveDocumentRetentionSummary | null;
 }
 
 interface UtilityLlmRetrievalState {
@@ -51,7 +46,6 @@ interface UtilityLlmRetrievalState {
   usedForQuery: boolean;
   usedForImages: boolean;
   usedForExtractionSummaries: boolean;
-  usedForDocumentRetention: boolean;
   calls: UtilityLlmCallDiagnostics[];
 }
 
@@ -68,26 +62,6 @@ type RetrievalProgressPublisher = (
   type: RetrievalStreamEventType,
   data?: Record<string, unknown>,
 ) => Promise<void>;
-
-type LiveDocumentRetentionClass =
-  | 'durable'
-  | 'ephemeral'
-  | 'reject'
-  | 'undecided';
-
-interface LiveDocumentRetentionSummary {
-  totalDocuments: number;
-  durableCount: number;
-  ephemeralCount: number;
-  rejectCount: number;
-  undecidedCount: number;
-  decisions: Array<{
-    title: string;
-    url: string;
-    retention: LiveDocumentRetentionClass;
-    reason?: string;
-  }>;
-}
 
 @Injectable()
 export class RetrievalService {
@@ -149,7 +123,6 @@ export class RetrievalService {
       usedForQuery: false,
       usedForImages: false,
       usedForExtractionSummaries: false,
-      usedForDocumentRetention: false,
       calls: [],
     };
     const embeddingConfig = this.embeddingService.getConfiguration();
@@ -313,8 +286,6 @@ export class RetrievalService {
           warnings: [],
           utilityDiagnostics: [],
           usedExtractionSummaries: false,
-          usedDocumentRetention: false,
-          documentRetention: null,
         };
 
     if (liveResult.error) {
@@ -325,7 +296,6 @@ export class RetrievalService {
     caveats.push(...liveResult.warnings);
     utilityState.usedForExtractionSummaries =
       liveResult.usedExtractionSummaries;
-    utilityState.usedForDocumentRetention = liveResult.usedDocumentRetention;
     utilityState.calls.push(...liveResult.utilityDiagnostics);
 
     if (imageParts.length > 0 && !utilitySupport.usedForImages) {
@@ -368,9 +338,6 @@ export class RetrievalService {
       ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
       ...(caveats.length > 0 ? { warnings: caveats } : {}),
       utilityLlm: utilityState,
-      ...(liveResult.documentRetention
-        ? { liveDocumentRetention: liveResult.documentRetention }
-        : {}),
       embeddingService: embeddingState,
       knowledgeStorePath: this.knowledgeStore.storePath,
       knowledgeStoreKind: this.knowledgeStore.storeKind,
@@ -523,8 +490,6 @@ export class RetrievalService {
         warnings: [],
         utilityDiagnostics: [],
         usedExtractionSummaries: false,
-        usedDocumentRetention: false,
-        documentRetention: null,
       };
     }
     const warnings: string[] = [];
@@ -549,49 +514,14 @@ export class RetrievalService {
     warnings.push(...extractionSummaries.warnings);
     utilityDiagnostics.push(...extractionSummaries.diagnostics);
 
-    const documentRetention = await this.decideLiveDocumentRetention(
-      documents,
-      effectiveQuery,
-      intent,
-      request.query.freshness,
-      correlationId,
-      publish,
-    );
-
-    warnings.push(...documentRetention.warnings);
-    utilityDiagnostics.push(...documentRetention.diagnostics);
-
-    const retentionSummary = this.summarizeLiveDocumentRetention(
-      documents,
-      documentRetention.retentionByUrl,
-    );
-    const durableDocuments = documents.filter(
-      (document) =>
-        documentRetention.retentionByUrl.get(document.url)?.retention ===
-        'durable',
-    );
-
-    try {
-      if (durableDocuments.length > 0) {
-        await this.knowledgeStore.upsertExtractedDocuments(
-          durableDocuments,
-          effectiveQuery,
-          intent,
-          retrievedAt,
-          request.query.freshness,
-        );
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'Unknown persistence error.';
-
-      this.logger.warn(
-        `[retrieval] Live evidence was returned, but cache persistence failed: ${message}`,
-      );
-      warnings.push(
-        `Knowledge-store cache persistence failed after live retrieval: ${message}`,
-      );
-    }
+    // We previously had a Utility-LLM retention pass that decided
+    // which docs to persist to the durable knowledge store, gated
+    // by a `durable | ephemeral | reject` LLM call. The knowledge
+    // store isn't consumed anywhere yet, so the retention LLM call
+    // and the upsert it gated have both been removed. When the
+    // store comes online again, reintroduce the upsert here —
+    // ideally as a background fire-and-forget so it doesn't block
+    // the user's turn.
 
     return {
       chunks: documents.map((document, index) =>
@@ -608,8 +538,6 @@ export class RetrievalService {
       warnings,
       utilityDiagnostics,
       usedExtractionSummaries: extractionSummaries.summariesByUrl.size > 0,
-      usedDocumentRetention: documentRetention.retentionByUrl.size > 0,
-      documentRetention: retentionSummary,
     };
   }
 
@@ -716,100 +644,6 @@ export class RetrievalService {
     });
 
     return extractionSummaries;
-  }
-
-  private async decideLiveDocumentRetention(
-    documents: ExtractedDocument[],
-    effectiveQuery: string,
-    intent: string,
-    freshness: RetrievalFreshness,
-    correlationId: string,
-    publish: RetrievalProgressPublisher,
-  ): Promise<UtilityLlmDocumentRetentionDecision> {
-    await publish('utility_llm.document_retention.started', {
-      documentCount: documents.length,
-    });
-
-    const documentRetention =
-      await this.utilityLlmService.decideDocumentRetention({
-        correlationId,
-        queryText: effectiveQuery,
-        intent,
-        freshness,
-        documents: documents.map((document) => ({
-          title: document.title,
-          url: document.url,
-          publishedAt: document.publishedAt,
-          excerpt: document.excerpt,
-          content: document.content,
-        })),
-      });
-
-    const counts = this.countRetentionClasses(
-      documents,
-      documentRetention.retentionByUrl,
-    );
-
-    await publish('utility_llm.document_retention.completed', {
-      warningCount: documentRetention.warnings.length,
-      diagnostics: documentRetention.diagnostics,
-      ...counts,
-    });
-
-    return documentRetention;
-  }
-
-  private summarizeLiveDocumentRetention(
-    documents: ExtractedDocument[],
-    retentionByUrl: UtilityLlmDocumentRetentionDecision['retentionByUrl'],
-  ): LiveDocumentRetentionSummary {
-    const counts = this.countRetentionClasses(documents, retentionByUrl);
-
-    return {
-      totalDocuments: documents.length,
-      ...counts,
-      decisions: documents.map((document) => {
-        const decision = retentionByUrl.get(document.url);
-
-        return {
-          title: document.title,
-          url: document.url,
-          retention: decision?.retention ?? 'undecided',
-          ...(decision?.reason ? { reason: decision.reason } : {}),
-        };
-      }),
-    };
-  }
-
-  private countRetentionClasses(
-    documents: ExtractedDocument[],
-    retentionByUrl: UtilityLlmDocumentRetentionDecision['retentionByUrl'],
-  ): Omit<LiveDocumentRetentionSummary, 'totalDocuments' | 'decisions'> {
-    let durableCount = 0;
-    let ephemeralCount = 0;
-    let rejectCount = 0;
-    let undecidedCount = 0;
-
-    for (const document of documents) {
-      const retention = retentionByUrl.get(document.url)?.retention;
-
-      if (retention === 'durable') {
-        durableCount += 1;
-      } else if (retention === 'ephemeral') {
-        ephemeralCount += 1;
-      } else if (retention === 'reject') {
-        rejectCount += 1;
-      } else {
-        undecidedCount += 1;
-      }
-    }
-
-    return {
-      durableCount,
-      ephemeralCount,
-      rejectCount,
-      undecidedCount,
-    };
   }
 
   private mapLocalResultToEvidence(result: {
