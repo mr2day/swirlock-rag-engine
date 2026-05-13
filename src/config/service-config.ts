@@ -35,14 +35,6 @@ type ServiceConfigModule = {
       initialBackoffMs: number;
       maxBackoffMs: number;
     };
-    wikipedia: {
-      enabled: boolean;
-      baseUrl: string;
-      userAgent: string;
-      searchLimit: number;
-      extractLimit: number;
-      timeoutMs: number;
-    };
   };
   env: Record<string, string>;
   buildEnv: () => Record<string, string>;

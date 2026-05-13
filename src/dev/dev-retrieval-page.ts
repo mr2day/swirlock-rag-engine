@@ -302,7 +302,6 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
               <div class="checkboxes">
                 <label><input type="checkbox" id="mode-local" /> local_rag</label>
                 <label><input type="checkbox" id="mode-live" checked /> live_web</label>
-                <label><input type="checkbox" id="skip-summaries" /> skipUtilitySummaries</label>
               </div>
             </div>
           </div>
@@ -348,8 +347,6 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
       (function () {
         const PHASE_LABELS = {
           'retrieval.started': 'Starting retrieval',
-          'utility_llm.retrieval_support.started': 'Planning the search',
-          'utility_llm.retrieval_support.completed': 'Search plan ready',
           'query.normalized': 'Refining the query',
           'embedding.query.started': 'Generating query embedding',
           'embedding.query.completed': 'Query embedding ready',
@@ -360,20 +357,16 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
           'live.search.completed': 'Web search done',
           'live.extract.started': 'Reading sources',
           'live.extract.completed': 'Sources read',
-          'utility_llm.extraction_summaries.started': 'Summarizing sources',
-          'utility_llm.extraction_summaries.completed': 'Summaries ready',
           'evidence.chunk': 'Evidence chunk',
           'retrieval.completed': 'Retrieval complete',
           'retrieval.failed': 'Retrieval failed',
         };
 
         const PAIRS = {
-          'utility_llm.retrieval_support.completed': 'utility_llm.retrieval_support.started',
           'embedding.query.completed': 'embedding.query.started',
           'local.search.completed': 'local.search.started',
           'live.search.completed': 'live.search.started',
           'live.extract.completed': 'live.extract.started',
-          'utility_llm.extraction_summaries.completed': 'utility_llm.extraction_summaries.started',
         };
 
         const queryInput = document.getElementById('query-input');
@@ -381,7 +374,6 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
         const maxChunksInput = document.getElementById('max-chunks');
         const modeLocal = document.getElementById('mode-local');
         const modeLive = document.getElementById('mode-live');
-        const skipSummaries = document.getElementById('skip-summaries');
         const runBtn = document.getElementById('run-btn');
         const cancelBtn = document.getElementById('cancel-btn');
         const phaseList = document.getElementById('phase-list');
@@ -523,7 +515,6 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
             if (typeof data.resultCount === 'number') metaParts.push(data.resultCount + ' results');
             if (typeof data.documentCount === 'number') metaParts.push(data.documentCount + ' docs');
             if (typeof data.evidenceChunkCount === 'number') metaParts.push(data.evidenceChunkCount + ' chunks');
-            if (typeof data.summaryCount === 'number') metaParts.push(data.summaryCount + ' summaries');
             if (startRow) {
               startRow.classList.remove('running');
               startRow.classList.add('done');
@@ -652,7 +643,6 @@ export const devRetrievalPageHtml = `<!DOCTYPE html>
                   freshness: freshnessSelect.value,
                   allowedModes,
                   maxEvidenceChunks,
-                  skipUtilitySummaries: skipSummaries.checked,
                 },
               },
             },

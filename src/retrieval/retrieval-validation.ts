@@ -1,7 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { isIsoUtcTimestamp } from '../common/api-envelope';
 import type {
-  ImageInputPart,
   InputPart,
   RequestPriority,
   RetrieveEvidenceRequest,
@@ -83,11 +82,6 @@ export function validateRetrieveEvidenceRequest(
     throw validationError('query.maxEvidenceChunks must be an integer >= 1.');
   }
 
-  const skipUtilitySummaries = expectOptionalBoolean(
-    query.skipUtilitySummaries,
-    'query.skipUtilitySummaries',
-    false,
-  );
   const userLocation = validateOptionalUserLocation(query.userLocation);
   const hints = query.hints ? query.hints.map(validateRetrievalHint) : [];
 
@@ -103,7 +97,6 @@ export function validateRetrieveEvidenceRequest(
         requestedMaxEvidenceChunks,
         maxEvidenceChunks,
       ),
-      skipUtilitySummaries,
       ...(userLocation ? { userLocation } : {}),
     },
   };
@@ -223,11 +216,7 @@ function validateInputPart(part: unknown, index: number): InputPart {
     return validateTextPart(inputPart, index);
   }
 
-  if (inputPart.type === 'image') {
-    return validateImagePart(inputPart, index);
-  }
-
-  throw validationError(`query.parts[${index}].type must be text or image.`);
+  throw validationError(`query.parts[${index}].type must be text.`);
 }
 
 function validateTextPart(part: TextInputPart, index: number): TextInputPart {
@@ -238,31 +227,6 @@ function validateTextPart(part: TextInputPart, index: number): TextInputPart {
   return {
     type: 'text',
     text: part.text.trim(),
-  };
-}
-
-function validateImagePart(
-  part: ImageInputPart,
-  index: number,
-): ImageInputPart {
-  const hasImageId = Boolean(part.imageId?.trim());
-  const hasImageUrl = Boolean(part.imageUrl?.trim());
-
-  if (hasImageId === hasImageUrl) {
-    throw validationError(
-      `query.parts[${index}] must include exactly one of imageId or imageUrl.`,
-    );
-  }
-
-  if (hasImageUrl && !isValidUrl(part.imageUrl ?? '')) {
-    throw validationError(`query.parts[${index}].imageUrl must be a URL.`);
-  }
-
-  return {
-    type: 'image',
-    imageId: part.imageId?.trim(),
-    imageUrl: part.imageUrl?.trim(),
-    mimeType: part.mimeType?.trim(),
   };
 }
 
@@ -306,32 +270,6 @@ function expectEnum<T extends string>(
   }
 
   return value as T;
-}
-
-function expectOptionalBoolean(
-  value: unknown,
-  label: string,
-  fallback: boolean,
-): boolean {
-  if (value === undefined || value === null) {
-    return fallback;
-  }
-
-  if (typeof value !== 'boolean') {
-    throw validationError(`${label} must be a boolean.`);
-  }
-
-  return value;
-}
-
-function isValidUrl(value: string): boolean {
-  try {
-    const parsed = new URL(value);
-
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
 }
 
 function validationError(message: string): BadRequestException {

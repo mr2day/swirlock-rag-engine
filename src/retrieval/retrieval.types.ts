@@ -6,8 +6,8 @@ export type RetrievalMode =
   | 'local_rag'
   | 'live_web'
   | 'local_and_live';
-export type Modality = 'text' | 'image' | 'multimodal';
-export type EvidenceSourceType = 'web' | 'local_cache' | 'image_analysis';
+export type Modality = 'text';
+export type EvidenceSourceType = 'web' | 'local_cache';
 
 export interface RequestContext {
   callerService: string;
@@ -22,14 +22,7 @@ export interface TextInputPart {
   text: string;
 }
 
-export interface ImageInputPart {
-  type: 'image';
-  imageId?: string;
-  imageUrl?: string;
-  mimeType?: string;
-}
-
-export type InputPart = TextInputPart | ImageInputPart;
+export type InputPart = TextInputPart;
 
 export interface RetrievalHint {
   kind:
@@ -63,7 +56,6 @@ export interface RetrieveEvidenceRequest {
     freshness: RetrievalFreshness;
     allowedModes?: RetrievalAllowedMode[];
     maxEvidenceChunks?: number;
-    skipUtilitySummaries?: boolean;
     userLocation?: UserLocation;
   };
 }
@@ -72,7 +64,6 @@ export interface NormalizedQuery {
   modality: Modality;
   intent: string;
   queryText: string;
-  imageObservations: string[];
   retrievalMode: RetrievalMode;
   freshness: RetrievalFreshness;
   reason: string;
@@ -98,21 +89,6 @@ export interface RetrievalDiagnostics {
   liveResultCount?: number;
   liveSearchError?: string;
   warnings?: string[];
-  utilityLlm?: {
-    enabled: boolean;
-    configuredUrl: string;
-    usedForQuery: boolean;
-    usedForImages: boolean;
-    usedForExtractionSummaries: boolean;
-    calls: Array<{
-      task: string;
-      attempted: boolean;
-      succeeded: boolean;
-      durationMs: number;
-      attempts: number;
-      error?: string;
-    }>;
-  };
   embeddingService?: {
     enabled: boolean;
     configuredUrl: string;
@@ -142,8 +118,6 @@ export interface RetrieveEvidenceData {
 
 export type RetrievalStreamEventType =
   | 'retrieval.started'
-  | 'utility_llm.retrieval_support.started'
-  | 'utility_llm.retrieval_support.completed'
   | 'query.normalized'
   | 'embedding.query.started'
   | 'embedding.query.completed'
@@ -154,8 +128,6 @@ export type RetrievalStreamEventType =
   | 'live.search.completed'
   | 'live.extract.started'
   | 'live.extract.completed'
-  | 'utility_llm.extraction_summaries.started'
-  | 'utility_llm.extraction_summaries.completed'
   | 'evidence.chunk'
   | 'retrieval.completed'
   | 'retrieval.failed';
@@ -174,7 +146,6 @@ export type RetrievalStreamEmitter = (
 export interface ValidatedRetrieveEvidenceRequest extends RetrieveEvidenceRequest {
   query: RetrieveEvidenceRequest['query'] & {
     maxEvidenceChunks: number;
-    skipUtilitySummaries: boolean;
     allowedModes: RetrievalAllowedMode[];
     hints: RetrievalHint[];
   };

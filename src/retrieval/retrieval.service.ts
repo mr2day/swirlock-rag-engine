@@ -3,7 +3,6 @@ import { ConfigService } from '@nestjs/config';
 import { createUuidV7 } from '../common/ids';
 import { serviceRuntimeConfig } from '../config/service-config';
 import { SearchService } from '../search/search.service';
-import { WikipediaSearchService } from '../search/wikipedia-search.service';
 import type {
   ExtractedDocument,
   NormalizedSearchResult,
@@ -16,37 +15,21 @@ import {
   validateRetrieveEvidenceRequest,
   assertCorrelationId,
 } from './retrieval-validation';
-import { UtilityLlmService } from './utility-llm.service';
 import type {
   EvidenceChunk,
-  ImageInputPart,
-  Modality,
   NormalizedQuery,
   RetrieveEvidenceData,
   RetrievalFreshness,
-  RetrievalMode,
   RetrievalStreamEmitter,
   RetrievalStreamEventType,
   ValidatedRetrieveEvidenceRequest,
 } from './retrieval.types';
 import type { EmbeddingCallDiagnostics } from './embedding-service.types';
-import type { UtilityLlmCallDiagnostics } from './utility-llm.types';
 
 interface LiveRetrievalResult {
   chunks: EvidenceChunk[];
   error: string | null;
   warnings: string[];
-  utilityDiagnostics: UtilityLlmCallDiagnostics[];
-  usedExtractionSummaries: boolean;
-}
-
-interface UtilityLlmRetrievalState {
-  enabled: boolean;
-  configuredUrl: string;
-  usedForQuery: boolean;
-  usedForImages: boolean;
-  usedForExtractionSummaries: boolean;
-  calls: UtilityLlmCallDiagnostics[];
 }
 
 interface EmbeddingRetrievalState {
@@ -70,10 +53,8 @@ export class RetrievalService {
   constructor(
     private readonly configService: ConfigService,
     private readonly searchService: SearchService,
-    private readonly wikipediaSearchService: WikipediaSearchService,
     private readonly knowledgeStore: KnowledgeStoreService,
     private readonly retrievalPolicy: RetrievalPolicyService,
-    private readonly utilityLlmService: UtilityLlmService,
     private readonly embeddingService: EmbeddingServiceService,
   ) {}
 
@@ -110,21 +91,10 @@ export class RetrievalService {
       freshness: request.query.freshness,
       allowedModes: request.query.allowedModes,
       maxEvidenceChunks: request.query.maxEvidenceChunks,
-      skipUtilitySummaries: request.query.skipUtilitySummaries,
       partTypes: request.query.parts.map((part) => part.type),
     });
 
-    const initialQueryText = this.buildQueryText(request);
-    const imageParts = this.getImageParts(request);
-    const utilityConfig = this.utilityLlmService.getConfiguration();
-    const utilityState: UtilityLlmRetrievalState = {
-      enabled: utilityConfig.enabled,
-      configuredUrl: utilityConfig.configuredUrl,
-      usedForQuery: false,
-      usedForImages: false,
-      usedForExtractionSummaries: false,
-      calls: [],
-    };
+    const effectiveQuery = this.buildQueryText(request);
     const embeddingConfig = this.embeddingService.getConfiguration();
     const embeddingState: EmbeddingRetrievalState = {
       enabled: embeddingConfig.enabled,
@@ -134,52 +104,9 @@ export class RetrievalService {
       usedForQuery: false,
       calls: [],
     };
-    await publish('utility_llm.retrieval_support.started', {
-      enabled: utilityState.enabled,
-      configuredUrl: utilityState.configuredUrl,
-    });
-    const utilitySupport = await this.utilityLlmService.prepareRetrievalSupport(
-      {
-        correlationId,
-        queryText: initialQueryText,
-        freshness: request.query.freshness,
-        allowedModes: request.query.allowedModes,
-        intent: request.query.intent,
-        hints: request.query.hints,
-        imageParts,
-        ...(request.query.userLocation
-          ? { userLocation: request.query.userLocation }
-          : {}),
-      },
-    );
 
-    utilityState.usedForQuery = utilitySupport.usedForQuery;
-    utilityState.usedForImages = utilitySupport.usedForImages;
-    utilityState.calls.push(...utilitySupport.diagnostics);
-    await publish('utility_llm.retrieval_support.completed', {
-      usedForQuery: utilitySupport.usedForQuery,
-      usedForImages: utilitySupport.usedForImages,
-      searchQueries: utilitySupport.searchQueries,
-      imageObservationCount: utilitySupport.imageObservations.length,
-      warningCount: utilitySupport.warnings.length,
-      diagnostics: utilitySupport.diagnostics,
-    });
-
-    const effectiveQuery = (
-      utilitySupport.queryText ||
-      utilitySupport.searchQueries[0] ||
-      initialQueryText
-    ).trim();
     const hasSearchableText = effectiveQuery.length > 0;
-    const imageObservations =
-      utilitySupport.imageObservations.length > 0
-        ? utilitySupport.imageObservations
-        : this.buildImageObservations(imageParts);
-    const modality = this.detectModality(request);
-    const intent =
-      request.query.intent?.trim() ||
-      utilitySupport.intent ||
-      (imageParts.length > 0 ? 'image-supported-retrieval' : 'general');
+    const intent = request.query.intent?.trim() || 'general';
     const shouldProbeLocal =
       hasSearchableText && request.query.allowedModes.includes('local_rag');
     const caveats: string[] = [];
@@ -187,8 +114,7 @@ export class RetrievalService {
     await publish('query.normalized', {
       queryText: effectiveQuery,
       intent,
-      modality,
-      imageObservationCount: imageObservations.length,
+      modality: 'text',
       hasSearchableText,
     });
 
@@ -260,7 +186,7 @@ export class RetrievalService {
       freshness: request.query.freshness,
       localResultCount: localResults.length,
       hasSearchableText,
-      hasImageInput: imageParts.length > 0,
+      hasImageInput: false,
     });
     await publish('retrieval.policy.decided', {
       mode: policyDecision.mode,
@@ -275,7 +201,6 @@ export class RetrievalService {
     const liveResult = policyDecision.useLive
       ? await this.performLiveRetrieval(
           effectiveQuery,
-          intent,
           request,
           correlationId,
           publish,
@@ -284,33 +209,17 @@ export class RetrievalService {
           chunks: [],
           error: null,
           warnings: [],
-          utilityDiagnostics: [],
-          usedExtractionSummaries: false,
         };
 
     if (liveResult.error) {
       caveats.push(liveResult.error);
     }
 
-    caveats.push(...utilitySupport.warnings);
     caveats.push(...liveResult.warnings);
-    utilityState.usedForExtractionSummaries =
-      liveResult.usedExtractionSummaries;
-    utilityState.calls.push(...liveResult.utilityDiagnostics);
-
-    if (imageParts.length > 0 && !utilitySupport.usedForImages) {
-      caveats.push(
-        'Image interpretation is reference-level only because no Utility LLM image observations were available.',
-      );
-    }
 
     const evidenceChunks = this.limitEvidenceChunks(
       this.rankEvidenceChunks(
-        this.dedupeEvidenceChunks([
-          ...liveResult.chunks,
-          ...localChunks,
-          ...this.buildImageReferenceEvidence(imageParts, policyDecision.mode),
-        ]),
+        this.dedupeEvidenceChunks([...liveResult.chunks, ...localChunks]),
       ),
       request.query.maxEvidenceChunks,
     );
@@ -320,10 +229,9 @@ export class RetrievalService {
       });
     }
     const normalizedQuery: NormalizedQuery = {
-      modality,
+      modality: 'text',
       intent,
       queryText: effectiveQuery,
-      imageObservations,
       retrievalMode: policyDecision.mode,
       freshness: request.query.freshness,
       reason: policyDecision.reason,
@@ -337,18 +245,13 @@ export class RetrievalService {
       liveResultCount: liveResult.chunks.length,
       ...(liveResult.error ? { liveSearchError: liveResult.error } : {}),
       ...(caveats.length > 0 ? { warnings: caveats } : {}),
-      utilityLlm: utilityState,
       embeddingService: embeddingState,
       knowledgeStorePath: this.knowledgeStore.storePath,
       knowledgeStoreKind: this.knowledgeStore.storeKind,
     };
     const data: RetrieveEvidenceData = {
       normalizedQuery,
-      searchQueries: this.buildSearchQueries(
-        initialQueryText,
-        effectiveQuery,
-        utilitySupport.searchQueries,
-      ),
+      searchQueries: [effectiveQuery].filter(Boolean),
       evidenceChunks,
       retrievalDiagnostics,
     };
@@ -389,7 +292,6 @@ export class RetrievalService {
 
   private async performLiveRetrieval(
     effectiveQuery: string,
-    intent: string,
     request: ValidatedRetrieveEvidenceRequest,
     correlationId: string,
     publish: RetrievalProgressPublisher,
@@ -407,121 +309,38 @@ export class RetrievalService {
       request.query.maxEvidenceChunks,
     );
     const exaProgress = this.buildLiveProgressHandler(publish, 'exa');
-    const wikipediaProgress = this.buildLiveProgressHandler(
-      publish,
-      'wikipedia',
-    );
 
-    const wikipediaConfig = this.wikipediaSearchService.getConfiguration();
-    const wikipediaSearchLimit = Math.min(
-      wikipediaConfig.searchLimit,
-      request.query.maxEvidenceChunks,
-    );
-    const wikipediaExtractLimit = Math.min(
-      wikipediaConfig.extractLimit,
-      request.query.maxEvidenceChunks,
-    );
-
-    const [exaSettled, wikipediaSettled] = await Promise.allSettled([
-      this.searchService.searchThenExtract(
+    let exaInspection: Awaited<
+      ReturnType<typeof this.searchService.searchThenExtract>
+    > | null = null;
+    let exaError: string | null = null;
+    try {
+      exaInspection = await this.searchService.searchThenExtract(
         effectiveQuery,
         searchLimit,
         extractLimit,
         exaProgress,
-      ),
-      wikipediaConfig.enabled
-        ? this.wikipediaSearchService.searchThenExtract(
-            effectiveQuery,
-            wikipediaSearchLimit,
-            wikipediaExtractLimit,
-            wikipediaProgress,
-          )
-        : Promise.resolve(null),
-    ]);
-
-    const exaInspection =
-      exaSettled.status === 'fulfilled' ? exaSettled.value : null;
-    const wikipediaInspection =
-      wikipediaSettled.status === 'fulfilled' ? wikipediaSettled.value : null;
-
-    const liveErrors: string[] = [];
-    if (exaSettled.status === 'rejected') {
-      const message =
-        exaSettled.reason instanceof Error
-          ? exaSettled.reason.message
-          : String(exaSettled.reason);
-      liveErrors.push(`Exa live retrieval failed: ${message}`);
-    } else if (exaInspection && exaInspection.status !== 'ok') {
-      liveErrors.push(
-        exaInspection.error
+      );
+      if (exaInspection.status !== 'ok') {
+        exaError = exaInspection.error
           ? `Exa live retrieval failed: ${exaInspection.error}`
-          : 'Exa live retrieval failed.',
-      );
-    }
-    if (wikipediaSettled.status === 'rejected') {
-      const message =
-        wikipediaSettled.reason instanceof Error
-          ? wikipediaSettled.reason.message
-          : String(wikipediaSettled.reason);
-      liveErrors.push(`Wikipedia live retrieval failed: ${message}`);
-    } else if (
-      wikipediaInspection &&
-      wikipediaInspection.status !== 'ok' &&
-      wikipediaInspection.error &&
-      wikipediaInspection.error !== 'Wikipedia provider is disabled.'
-    ) {
-      liveErrors.push(
-        `Wikipedia live retrieval failed: ${wikipediaInspection.error}`,
-      );
+          : 'Exa live retrieval failed.';
+      }
+    } catch (error) {
+      exaError = `Exa live retrieval failed: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
     }
 
-    const exaDocuments = exaInspection?.extract?.documents ?? [];
-    const wikipediaDocuments = wikipediaInspection?.extract?.documents ?? [];
-    const documents = this.mergeLiveDocuments(wikipediaDocuments, exaDocuments);
+    const documents = exaInspection?.extract?.documents ?? [];
 
-    if (
-      documents.length === 0 &&
-      exaInspection?.status !== 'ok' &&
-      (wikipediaInspection?.status !== 'ok' || wikipediaDocuments.length === 0)
-    ) {
+    if (documents.length === 0) {
       return {
         chunks: [],
-        error: liveErrors.length > 0 ? liveErrors.join(' | ') : null,
+        error: exaError,
         warnings: [],
-        utilityDiagnostics: [],
-        usedExtractionSummaries: false,
       };
     }
-    const warnings: string[] = [];
-    const utilityDiagnostics: UtilityLlmCallDiagnostics[] = [];
-    const shouldUseExtractionSummaries = !this.shouldSkipExtractionSummaries(
-      request.query.skipUtilitySummaries,
-    );
-    const extractionSummaries = shouldUseExtractionSummaries
-      ? await this.summarizeLiveDocuments(
-          documents,
-          effectiveQuery,
-          intent,
-          correlationId,
-          publish,
-        )
-      : {
-          summariesByUrl: new Map<string, string>(),
-          warnings: [],
-          diagnostics: [],
-        };
-
-    warnings.push(...extractionSummaries.warnings);
-    utilityDiagnostics.push(...extractionSummaries.diagnostics);
-
-    // We previously had a Utility-LLM retention pass that decided
-    // which docs to persist to the durable knowledge store, gated
-    // by a `durable | ephemeral | reject` LLM call. The knowledge
-    // store isn't consumed anywhere yet, so the retention LLM call
-    // and the upsert it gated have both been removed. When the
-    // store comes online again, reintroduce the upsert here —
-    // ideally as a background fire-and-forget so it doesn't block
-    // the user's turn.
 
     return {
       chunks: documents.map((document, index) =>
@@ -531,19 +350,16 @@ export class RetrievalService {
           retrievedAt,
           index,
           documents.length,
-          extractionSummaries.summariesByUrl.get(document.url),
         ),
       ),
-      error: liveErrors.length > 0 ? liveErrors.join(' | ') : null,
-      warnings,
-      utilityDiagnostics,
-      usedExtractionSummaries: extractionSummaries.summariesByUrl.size > 0,
+      error: exaError,
+      warnings: [],
     };
   }
 
   private buildLiveProgressHandler(
     publish: RetrievalProgressPublisher,
-    provider: 'exa' | 'wikipedia',
+    provider: 'exa',
   ): SearchExtractProgressHandler {
     return async (event) => {
       if (event.type === 'search_started') {
@@ -584,66 +400,6 @@ export class RetrievalService {
         });
       }
     };
-  }
-
-  private mergeLiveDocuments(
-    primary: ExtractedDocument[],
-    secondary: ExtractedDocument[],
-  ): ExtractedDocument[] {
-    const seen = new Set<string>();
-    const out: ExtractedDocument[] = [];
-    const push = (document: ExtractedDocument): void => {
-      const key = this.normalizeDocumentKey(document.url);
-      if (key && seen.has(key)) return;
-      if (key) seen.add(key);
-      out.push(document);
-    };
-    for (const document of primary) push(document);
-    for (const document of secondary) push(document);
-    return out;
-  }
-
-  private normalizeDocumentKey(url: string): string {
-    if (!url) return '';
-    try {
-      const parsed = new URL(url);
-      const host = parsed.host.toLowerCase().replace(/^www\./, '');
-      const path = parsed.pathname.replace(/\/+$/, '').toLowerCase();
-      return `${host}${path}`;
-    } catch {
-      return url.toLowerCase();
-    }
-  }
-
-  private async summarizeLiveDocuments(
-    documents: ExtractedDocument[],
-    effectiveQuery: string,
-    intent: string,
-    correlationId: string,
-    publish: RetrievalProgressPublisher,
-  ) {
-    await publish('utility_llm.extraction_summaries.started', {
-      documentCount: documents.length,
-    });
-    const extractionSummaries =
-      await this.utilityLlmService.summarizeExtractedDocuments({
-        correlationId,
-        queryText: effectiveQuery,
-        intent,
-        documents: documents.map((document) => ({
-          url: document.url,
-          excerpt: document.excerpt,
-          content: document.content,
-        })),
-      });
-
-    await publish('utility_llm.extraction_summaries.completed', {
-      summaryCount: extractionSummaries.summariesByUrl.size,
-      warningCount: extractionSummaries.warnings.length,
-      diagnostics: extractionSummaries.diagnostics,
-    });
-
-    return extractionSummaries;
   }
 
   private mapLocalResultToEvidence(result: {
@@ -760,7 +516,6 @@ export class RetrievalService {
     retrievedAt: string,
     index: number,
     totalDocuments: number,
-    utilitySummary?: string,
   ): EvidenceChunk {
     const publishedAt = this.normalizeOptionalTimestamp(document.publishedAt);
     const fallbackScore =
@@ -771,9 +526,7 @@ export class RetrievalService {
       sourceType: 'web',
       sourceTitle: document.title || document.url,
       sourceUrl: document.url,
-      content: this.limitEvidenceContent(
-        utilitySummary || document.excerpt || document.content,
-      ),
+      content: this.limitEvidenceContent(document.excerpt || document.content),
       relevanceScore: this.roundScore(document.score ?? fallbackScore),
       freshnessScore: this.scoreFreshness(
         publishedAt ?? retrievedAt,
@@ -782,36 +535,6 @@ export class RetrievalService {
       ...(publishedAt ? { publishedAt } : {}),
       retrievedAt,
     };
-  }
-
-  private shouldSkipExtractionSummaries(
-    skipUtilitySummaries: boolean,
-  ): boolean {
-    return skipUtilitySummaries;
-  }
-
-  private buildImageReferenceEvidence(
-    imageParts: ImageInputPart[],
-    retrievalMode: RetrievalMode,
-  ): EvidenceChunk[] {
-    if (imageParts.length === 0) {
-      return [];
-    }
-
-    const retrievedAt = new Date().toISOString();
-
-    return imageParts.map((part, index) => ({
-      evidenceId: createUuidV7(),
-      sourceType: 'image_analysis',
-      sourceTitle: `Image reference ${index + 1}`,
-      ...(part.imageUrl ? { sourceUrl: part.imageUrl } : {}),
-      content: part.imageUrl
-        ? `Image URL received for retrieval support: ${part.imageUrl}. Utility LLM image observations are reported on normalizedQuery.imageObservations when available.`
-        : `Image ID received for retrieval support: ${part.imageId}. Utility LLM image observations require a media resolver before RAG can fetch image bytes.`,
-      relevanceScore: retrievalMode === 'none' ? 0.2 : 0.1,
-      freshnessScore: 1,
-      retrievedAt,
-    }));
   }
 
   private buildQueryText(request: ValidatedRetrieveEvidenceRequest): string {
@@ -828,45 +551,6 @@ export class RetrievalService {
       .filter((segment) => segment.trim().length > 0)
       .join(' ')
       .trim();
-  }
-
-  private detectModality(request: ValidatedRetrieveEvidenceRequest): Modality {
-    const hasText = request.query.parts.some((part) => part.type === 'text');
-    const hasImage = request.query.parts.some((part) => part.type === 'image');
-
-    if (hasText && hasImage) {
-      return 'multimodal';
-    }
-
-    return hasImage ? 'image' : 'text';
-  }
-
-  private getImageParts(
-    request: ValidatedRetrieveEvidenceRequest,
-  ): ImageInputPart[] {
-    return request.query.parts.filter(
-      (part): part is ImageInputPart => part.type === 'image',
-    );
-  }
-
-  private buildImageObservations(imageParts: ImageInputPart[]): string[] {
-    return imageParts.map((part, index) =>
-      part.imageUrl
-        ? `Image ${index + 1} is referenced by URL: ${part.imageUrl}.`
-        : `Image ${index + 1} is referenced by imageId: ${part.imageId}.`,
-    );
-  }
-
-  private buildSearchQueries(
-    initialQueryText: string,
-    effectiveQuery: string,
-    utilityQueries: string[],
-  ): string[] {
-    return [
-      ...new Set(
-        [effectiveQuery, ...utilityQueries, initialQueryText].filter(Boolean),
-      ),
-    ];
   }
 
   private dedupeEvidenceChunks(chunks: EvidenceChunk[]): EvidenceChunk[] {

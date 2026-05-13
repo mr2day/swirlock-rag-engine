@@ -5,7 +5,6 @@ import { EmbeddingWorkerService } from './embedding-worker.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
 import { RetrievalService } from './retrieval.service';
-import { UtilityLlmService } from './utility-llm.service';
 
 @Module({
   imports: [SearchModule],
@@ -13,14 +12,12 @@ import { UtilityLlmService } from './utility-llm.service';
     KnowledgeStoreService,
     RetrievalPolicyService,
     RetrievalService,
-    UtilityLlmService,
     EmbeddingServiceService,
     EmbeddingWorkerService,
   ],
   exports: [
     RetrievalService,
     KnowledgeStoreService,
-    UtilityLlmService,
     EmbeddingServiceService,
   ],
 })

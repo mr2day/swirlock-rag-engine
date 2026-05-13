@@ -1,7 +1,7 @@
 # Swirlock RAG Engine
 
 Retrieval service for the Swirlock ecosystem. Owns local knowledge search,
-live web search (Exa + Wikipedia), evidence packaging, and citation data.
+live web search (Exa), evidence packaging, and citation data.
 The ecosystem API is WebSocket-only (Swirlock Contracts v4 today; v5 is the
 forward target — see "Contract version" below).
 
@@ -13,7 +13,7 @@ service will start cleanly.
 | Dependency | What for | Default |
 | --- | --- | --- |
 | **PostgreSQL 14+ with `pgvector`, `pg_trgm`, `unaccent`, `citext` extensions** | Persistent local knowledge store with hybrid lexical + vector search | `127.0.0.1:5432`, db `swirlock_rag`, role `swirlock_rag` |
-| **Swirlock LLM Host** (peer ecosystem service) | Query refinement, extraction summaries, document-retention decisions | `http://127.0.0.1:3213` |
+| **Swirlock LLM Host** (peer ecosystem service) | Reserved for future utility-LLM tasks (currently unused) | `http://127.0.0.1:3213` |
 | **Swirlock Embedding Service** (peer ecosystem service) | Vector embeddings for the local knowledge store and query embeddings | `http://127.0.0.1:3002` |
 | **Exa API key** | Live web search and content extraction | Required for live retrieval; service runs without it but live search is disabled |
 
@@ -100,8 +100,8 @@ pm2 save
 Two layers, both committed to the repo as defaults:
 
 - **`service.config.cjs`** — runtime defaults: port (3001), host
-  (127.0.0.1), upstream URLs, embedding-worker tuning, Wikipedia
-  provider settings, RAG result limits. Edit in place to change defaults.
+  (127.0.0.1), upstream URLs, embedding-worker tuning, RAG result
+  limits. Edit in place to change defaults.
 - **`.env.local`** — machine-specific secrets (`EXA_API_KEY`,
   `RAG_DATABASE_URL`). Gitignored.
 
@@ -129,16 +129,12 @@ Retrieval progress is emitted as v4 envelope messages whose `type` is the
 retrieval event name, including:
 
 - `retrieval.started`
-- `utility_llm.retrieval_support.started` / `.completed`
 - `query.normalized`
 - `embedding.query.started` / `.completed`
 - `local.search.started` / `.completed`
 - `retrieval.policy.decided`
-- `live.search.started` / `.completed` (fires once per provider — Exa and
-  Wikipedia — with `data.provider` discriminator)
+- `live.search.started` / `.completed` (Exa)
 - `live.extract.started` / `.completed`
-- `utility_llm.extraction_summaries.started` / `.completed`
-- `utility_llm.document_retention.started` / `.completed`
 - `evidence.chunk`
 - `retrieval.completed`
 - `retrieval.failed`

@@ -28,7 +28,7 @@ export function cleanContent(dirty: string): string {
   cleaned = cleaned.replace(/[|]{2,}/g, ' ');
   cleaned = cleaned.replace(/[#*_`>~]/g, ' ');
 
-  // Wikipedia / encyclopedia structural markers:
+  // Encyclopedia structural markers:
   //   [edit] [1] [23] [citation needed] [verification needed] ...
   cleaned = cleaned.replace(/\[\d+\]/g, ' ');
   cleaned = cleaned.replace(
@@ -155,7 +155,7 @@ export function cleanContent(dirty: string): string {
     /^contact us\.?$/i,
     /^about us\.?$/i,
 
-    // Wikipedia structural section headers
+    // Encyclopedia structural section headers
     /^\[edit\]\.?$/i,
     /^references\.?$/i,
     /^external links\.?$/i,
