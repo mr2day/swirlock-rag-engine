@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { isIsoUtcTimestamp } from '../common/api-envelope';
 import type {
+  SearchRunRequest,
+  ValidatedSearchRunRequest,
+} from './search-run.types';
+import type {
   InputPart,
   RequestPriority,
   RetrieveEvidenceRequest,
@@ -166,6 +170,57 @@ function validateOptionalUserLocation(value: unknown): UserLocation | null {
   }
 
   return result;
+}
+
+const SEARCH_RUN_EXTRACT_LIMIT_MIN = 1;
+const SEARCH_RUN_EXTRACT_LIMIT_MAX = 5;
+const SEARCH_RUN_EXTRACT_LIMIT_DEFAULT = 2;
+
+export function validateSearchRunRequest(
+  value: unknown,
+): ValidatedSearchRunRequest {
+  const request = expectObject(value, 'request body') as unknown as SearchRunRequest;
+
+  validateRequestContext(request.requestContext);
+
+  if (!request.query || typeof request.query !== 'object') {
+    throw validationError('query is required.');
+  }
+
+  const query = request.query;
+  const queryText =
+    typeof query.queryText === 'string' ? query.queryText.trim() : '';
+  if (!queryText) {
+    throw validationError('query.queryText is required.');
+  }
+
+  let extractLimit = SEARCH_RUN_EXTRACT_LIMIT_DEFAULT;
+  if (query.extractLimit !== undefined) {
+    if (
+      !Number.isInteger(query.extractLimit) ||
+      query.extractLimit < SEARCH_RUN_EXTRACT_LIMIT_MIN ||
+      query.extractLimit > SEARCH_RUN_EXTRACT_LIMIT_MAX
+    ) {
+      throw validationError(
+        `query.extractLimit must be an integer between ${SEARCH_RUN_EXTRACT_LIMIT_MIN} and ${SEARCH_RUN_EXTRACT_LIMIT_MAX}.`,
+      );
+    }
+    extractLimit = query.extractLimit;
+  }
+
+  const freshness =
+    query.freshness === undefined
+      ? 'medium'
+      : expectEnum(query.freshness, FRESHNESS_VALUES, 'query.freshness');
+
+  return {
+    requestContext: request.requestContext,
+    query: {
+      queryText,
+      extractLimit,
+      freshness,
+    },
+  };
 }
 
 export function assertCorrelationId(

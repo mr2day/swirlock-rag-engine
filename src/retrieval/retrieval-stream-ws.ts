@@ -1,8 +1,10 @@
 import { Logger } from '@nestjs/common';
 import type { Server as HttpServer } from 'node:http';
 import WebSocket, { WebSocketServer } from 'ws';
+import { validateSearchRunRequest } from './retrieval-validation';
 import { RetrievalService } from './retrieval.service';
 import type { RetrievalStreamEvent } from './retrieval.types';
+import { SearchRunService } from './search-run.service';
 
 const RETRIEVAL_STREAM_PATH = '/v5/retrieval';
 
@@ -28,6 +30,7 @@ function rawToString(raw: WebSocket.RawData): string {
 export function attachRetrievalStreamServer(
   httpServer: HttpServer,
   retrievalService: RetrievalService,
+  searchRunService: SearchRunService,
 ): void {
   const wss = new WebSocketServer({ noServer: true });
   const log = new Logger('RetrievalStream');
@@ -40,7 +43,7 @@ export function attachRetrievalStreamServer(
     }
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      handleRetrievalSocket(ws, retrievalService, log);
+      handleRetrievalSocket(ws, retrievalService, searchRunService, log);
     });
   });
 }
@@ -48,10 +51,11 @@ export function attachRetrievalStreamServer(
 function handleRetrievalSocket(
   ws: WebSocket,
   retrievalService: RetrievalService,
+  searchRunService: SearchRunService,
   log: Logger,
 ): void {
   ws.on('message', (raw: WebSocket.RawData) => {
-    void handleMessage(ws, raw, retrievalService, log);
+    void handleMessage(ws, raw, retrievalService, searchRunService, log);
   });
 }
 
@@ -59,6 +63,7 @@ async function handleMessage(
   ws: WebSocket,
   raw: WebSocket.RawData,
   retrievalService: RetrievalService,
+  searchRunService: SearchRunService,
   log: Logger,
 ): Promise<void> {
   let correlationId = 'missing-correlation-id';
@@ -93,12 +98,56 @@ async function handleMessage(
       return;
     }
 
+    if (message.type === 'search.run') {
+      const rawRequest = isRecord(message.payload)
+        ? message.payload.request
+        : undefined;
+      if (!isRecord(rawRequest)) {
+        sendError(
+          ws,
+          correlationId,
+          'validation_failed',
+          'payload.request is required.',
+          false,
+        );
+        return;
+      }
+
+      let validated;
+      try {
+        validated = validateSearchRunRequest(rawRequest);
+      } catch (err) {
+        const validationMessage =
+          err instanceof Error ? err.message : String(err);
+        sendError(
+          ws,
+          correlationId,
+          'validation_failed',
+          validationMessage,
+          false,
+        );
+        return;
+      }
+
+      const data = await searchRunService.run(validated, correlationId);
+      sendEnvelope(ws, {
+        type: 'search.completed',
+        correlationId,
+        payload: {
+          sequence: 1,
+          occurredAt: new Date().toISOString(),
+          data,
+        },
+      });
+      return;
+    }
+
     if (message.type !== 'retrieve_evidence') {
       sendError(
         ws,
         correlationId,
         'validation_failed',
-        'type must be retrieve_evidence, health.get, cancel, or heartbeat.',
+        'type must be retrieve_evidence, search.run, health.get, cancel, or heartbeat.',
         false,
       );
       return;

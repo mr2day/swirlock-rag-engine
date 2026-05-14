@@ -5,6 +5,7 @@ import { EmbeddingWorkerService } from './embedding-worker.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
 import { RetrievalService } from './retrieval.service';
+import { SearchRunService } from './search-run.service';
 
 @Module({
   imports: [SearchModule],
@@ -14,11 +15,13 @@ import { RetrievalService } from './retrieval.service';
     RetrievalService,
     EmbeddingServiceService,
     EmbeddingWorkerService,
+    SearchRunService,
   ],
   exports: [
     RetrievalService,
     KnowledgeStoreService,
     EmbeddingServiceService,
+    SearchRunService,
   ],
 })
 export class RetrievalModule {}

@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import type { Server as HttpServer } from 'node:http';
 import { AppModule } from './app.module';
 import { RetrievalService } from './retrieval/retrieval.service';
+import { SearchRunService } from './retrieval/search-run.service';
 import { attachRetrievalStreamServer } from './retrieval/retrieval-stream-ws';
 
 async function bootstrap() {
@@ -19,6 +20,7 @@ async function bootstrap() {
   attachRetrievalStreamServer(
     app.getHttpServer() as HttpServer,
     app.get(RetrievalService),
+    app.get(SearchRunService),
   );
 }
 void bootstrap();
