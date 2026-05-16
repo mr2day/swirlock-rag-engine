@@ -8,8 +8,6 @@ import type {
   NormalizedSearchResult,
   SearchExtractProgressHandler,
 } from '../search/search.types';
-import { DistillationService } from '../utility-llm/distillation.service';
-import type { DistillationSource } from '../utility-llm/distillation.service';
 import { EmbeddingServiceService } from './embedding-service.service';
 import { KnowledgeStoreService } from './knowledge-store.service';
 import { RetrievalPolicyService } from './retrieval-policy.service';
@@ -30,8 +28,6 @@ import type { EmbeddingCallDiagnostics } from './embedding-service.types';
 
 interface LiveRetrievalResult {
   chunks: EvidenceChunk[];
-  /** Raw extracted documents from Exa, kept uncapped for distillation. */
-  rawDocuments: ExtractedDocument[];
   error: string | null;
   warnings: string[];
 }
@@ -60,7 +56,6 @@ export class RetrievalService {
     private readonly knowledgeStore: KnowledgeStoreService,
     private readonly retrievalPolicy: RetrievalPolicyService,
     private readonly embeddingService: EmbeddingServiceService,
-    private readonly distillation: DistillationService,
   ) {}
 
   async retrieveEvidence(
@@ -212,7 +207,6 @@ export class RetrievalService {
         )
       : {
           chunks: [],
-          rawDocuments: [],
           error: null,
           warnings: [],
         };
@@ -222,13 +216,6 @@ export class RetrievalService {
     }
 
     caveats.push(...liveResult.warnings);
-
-    const distillation = await this.runDistillation(
-      effectiveQuery,
-      liveResult.rawDocuments,
-      correlationId,
-      publish,
-    );
 
     const evidenceChunks = this.limitEvidenceChunks(
       this.rankEvidenceChunks(
@@ -266,12 +253,6 @@ export class RetrievalService {
       normalizedQuery,
       searchQueries: [effectiveQuery].filter(Boolean),
       evidenceChunks,
-      ...(distillation
-        ? {
-            preparedPrompt: distillation.preparedPrompt,
-            preparedPromptModel: distillation.model,
-          }
-        : {}),
       retrievalDiagnostics,
     };
 
@@ -307,53 +288,6 @@ export class RetrievalService {
     });
 
     return data;
-  }
-
-  private async runDistillation(
-    query: string,
-    rawDocuments: ExtractedDocument[],
-    correlationId: string,
-    publish: RetrievalProgressPublisher,
-  ): Promise<{ preparedPrompt: string; model: string | null } | null> {
-    if (!this.distillation.isEnabled() || rawDocuments.length === 0) {
-      await publish('distillation.skipped', {
-        reason: rawDocuments.length === 0
-          ? 'no_live_documents'
-          : 'utility_llm_disabled',
-      });
-      return null;
-    }
-
-    const sources: DistillationSource[] = rawDocuments.map((doc, idx) => ({
-      index: idx + 1,
-      title: doc.title || doc.url,
-      url: doc.url,
-      publishedAt: doc.publishedAt,
-      content: doc.content,
-    }));
-
-    await publish('distillation.started', {
-      sourceCount: sources.length,
-      totalContentChars: sources.reduce((sum, s) => sum + s.content.length, 0),
-    });
-
-    const result = await this.distillation.distill(query, sources, correlationId);
-
-    if (!result) {
-      await publish('distillation.skipped', { reason: 'utility_llm_failed' });
-      return null;
-    }
-
-    await publish('distillation.completed', {
-      durationMs: result.durationMs,
-      model: result.model,
-      preparedPromptChars: result.preparedPrompt.length,
-    });
-
-    return {
-      preparedPrompt: result.preparedPrompt,
-      model: result.model,
-    };
   }
 
   private async performLiveRetrieval(
@@ -403,7 +337,6 @@ export class RetrievalService {
     if (documents.length === 0) {
       return {
         chunks: [],
-        rawDocuments: [],
         error: exaError,
         warnings: [],
       };
@@ -419,7 +352,6 @@ export class RetrievalService {
           documents.length,
         ),
       ),
-      rawDocuments: documents,
       error: exaError,
       warnings: [],
     };
@@ -589,12 +521,16 @@ export class RetrievalService {
     const fallbackScore =
       totalDocuments > 0 ? 0.75 - index / (totalDocuments + 4) : 0.65;
 
+    // The full Exa-extracted body text (up to text.maxCharacters,
+    // currently 24000) lands on `content` uncapped. The answer model
+    // reads this verbatim — no second-LLM distillation pass between
+    // retrieval and answer.
     return {
       evidenceId: createUuidV7(),
       sourceType: 'web',
       sourceTitle: document.title || document.url,
       sourceUrl: document.url,
-      content: this.limitEvidenceContent(document.excerpt || document.content),
+      content: (document.content || document.excerpt || '').trim(),
       relevanceScore: this.roundScore(document.score ?? fallbackScore),
       freshnessScore: this.scoreFreshness(
         publishedAt ?? retrievedAt,

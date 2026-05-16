@@ -4,7 +4,6 @@ import { loadServiceEnv } from './config/service-config';
 import { DevModule } from './dev/dev.module';
 import { RetrievalModule } from './retrieval/retrieval.module';
 import { SearchModule } from './search/search.module';
-import { UtilityLlmModule } from './utility-llm/utility-llm.module';
 
 @Module({
   imports: [
@@ -14,7 +13,6 @@ import { UtilityLlmModule } from './utility-llm/utility-llm.module';
       envFilePath: ['.env.local', '.env'],
       load: [loadServiceEnv],
     }),
-    UtilityLlmModule,
     RetrievalModule,
     SearchModule,
     DevModule,

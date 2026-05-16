@@ -12,12 +12,6 @@ type ServiceConfigModule = {
     maxEvidenceChunks: number;
     liveSearchLimit: number;
     liveExtractLimit: number;
-    utilityLlm: {
-      enabled: boolean;
-      hostUrl: string;
-      timeoutMs: number;
-      retries: number;
-    };
     embeddingService: {
       enabled: boolean;
       url: string;

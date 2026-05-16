@@ -8,20 +8,9 @@ const runtime = {
   host: '127.0.0.1',
   port: 3001,
   knowledgeStorePath: path.join(rootDir, 'data', 'knowledge-store.json'),
-  maxEvidenceChunks: 20,
-  liveSearchLimit: 20,
-  liveExtractLimit: 15,
-  utilityLlm: {
-    enabled: true,
-    hostUrl: 'ws://192.168.0.194:3213',
-    // idleTimeoutMs in the WS client: reset on every event from the
-    // host (queued/started/chunk/done), so this caps "no events for
-    // N seconds", not total wall-clock. Big distillation prompts on
-    // gemma4:e4b can take 30-60s of prompt processing before the
-    // first chunk; we want headroom over that.
-    timeoutMs: 120000,
-    retries: 1,
-  },
+  maxEvidenceChunks: 1,
+  liveSearchLimit: 5,
+  liveExtractLimit: 1,
   embeddingService: {
     enabled: true,
     url: 'http://127.0.0.1:3002',
@@ -55,14 +44,6 @@ function buildEnv(source = process.env) {
       source.RAG_LIVE_SEARCH_LIMIT || String(runtime.liveSearchLimit),
     RAG_LIVE_EXTRACT_LIMIT:
       source.RAG_LIVE_EXTRACT_LIMIT || String(runtime.liveExtractLimit),
-    UTILITY_LLM_ENABLED:
-      source.UTILITY_LLM_ENABLED || String(runtime.utilityLlm.enabled),
-    UTILITY_LLM_HOST_URL:
-      source.UTILITY_LLM_HOST_URL || runtime.utilityLlm.hostUrl,
-    UTILITY_LLM_TIMEOUT_MS:
-      source.UTILITY_LLM_TIMEOUT_MS || String(runtime.utilityLlm.timeoutMs),
-    UTILITY_LLM_RETRIES:
-      source.UTILITY_LLM_RETRIES || String(runtime.utilityLlm.retries),
     EMBEDDING_SERVICE_ENABLED:
       source.EMBEDDING_SERVICE_ENABLED ||
       String(runtime.embeddingService.enabled),
