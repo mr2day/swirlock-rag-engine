@@ -41,7 +41,8 @@ interface RawLlmEnvelope {
 
 interface PendingInferRequest {
   text: string;
-  timer: NodeJS.Timeout;
+  idleTimer: NodeJS.Timeout;
+  resetIdleTimer: () => void;
   resolve: (text: string) => void;
   reject: (error: Error) => void;
 }
@@ -193,14 +194,15 @@ export class UtilityLlmService implements OnModuleInit, OnModuleDestroy {
 
   /**
    * Run a non-streaming inference on the utility LLM. Returns the full
-   * concatenated text once the host emits `done`. Suitable for batch
-   * distillation work where the caller does not need token-by-token
-   * streaming.
+   * concatenated text once the host emits `done`. The `idleTimeoutMs`
+   * fires only when no event has arrived from the host for that long
+   * — long-but-progressing calls (large distillation prompts) stay
+   * alive as chunks stream in, and only a genuine stall terminates.
    */
   async infer(args: {
     messages: UtilityLlmMessage[];
     correlationId?: string;
-    timeoutMs?: number;
+    idleTimeoutMs?: number;
   }): Promise<string> {
     if (!this.enabled) {
       throw new ServiceUnavailableException('UtilityLlmService is disabled.');
@@ -213,7 +215,7 @@ export class UtilityLlmService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const correlationId = args.correlationId ?? randomUUID();
-    const timeoutMs = args.timeoutMs ?? this.timeoutMs;
+    const idleTimeoutMs = args.idleTimeoutMs ?? this.timeoutMs;
 
     return new Promise<string>((resolve, reject) => {
       if (this.pending.has(correlationId)) {
@@ -224,16 +226,34 @@ export class UtilityLlmService implements OnModuleInit, OnModuleDestroy {
         );
         return;
       }
-      const timer = setTimeout(() => {
+      let idleTimer: NodeJS.Timeout = setTimeout(() => {
+        this.sendCancel(correlationId);
         this.rejectPending(
           correlationId,
-          new ServiceUnavailableException('Utility LLM infer timeout'),
+          new ServiceUnavailableException(
+            `Utility LLM idle timeout (${idleTimeoutMs}ms with no chunks)`,
+          ),
         );
-      }, timeoutMs);
+      }, idleTimeoutMs);
+      const resetIdleTimer = (): void => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          this.sendCancel(correlationId);
+          this.rejectPending(
+            correlationId,
+            new ServiceUnavailableException(
+              `Utility LLM idle timeout (${idleTimeoutMs}ms with no chunks)`,
+            ),
+          );
+        }, idleTimeoutMs);
+        const pending = this.pending.get(correlationId);
+        if (pending) pending.idleTimer = idleTimer;
+      };
 
       this.pending.set(correlationId, {
         text: '',
-        timer,
+        idleTimer,
+        resetIdleTimer,
         resolve,
         reject,
       });
@@ -334,6 +354,9 @@ export class UtilityLlmService implements OnModuleInit, OnModuleDestroy {
     if (!pending) return;
     const payload = isRecord(env.payload) ? env.payload : {};
 
+    // Any event from the host counts as liveness — reset idle timer.
+    pending.resetIdleTimer();
+
     if (env.type === 'chunk' && typeof payload.text === 'string') {
       pending.text += payload.text;
       return;
@@ -352,11 +375,21 @@ export class UtilityLlmService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  private sendCancel(correlationId: string): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({ type: 'cancel', correlationId }));
+    } catch {
+      /* ignore */
+    }
+  }
+
   private resolvePending(correlationId: string, text: string): void {
     const pending = this.pending.get(correlationId);
     if (!pending) return;
     this.pending.delete(correlationId);
-    clearTimeout(pending.timer);
+    clearTimeout(pending.idleTimer);
     pending.resolve(text);
   }
 
@@ -364,14 +397,14 @@ export class UtilityLlmService implements OnModuleInit, OnModuleDestroy {
     const pending = this.pending.get(correlationId);
     if (!pending) return;
     this.pending.delete(correlationId);
-    clearTimeout(pending.timer);
+    clearTimeout(pending.idleTimer);
     pending.reject(error);
   }
 
   private failAll(error: Error): void {
     for (const [correlationId, pending] of this.pending) {
       this.pending.delete(correlationId);
-      clearTimeout(pending.timer);
+      clearTimeout(pending.idleTimer);
       pending.reject(new ServiceUnavailableException(error.message));
     }
   }

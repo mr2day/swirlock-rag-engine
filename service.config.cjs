@@ -14,7 +14,12 @@ const runtime = {
   utilityLlm: {
     enabled: true,
     hostUrl: 'ws://192.168.0.194:3213',
-    timeoutMs: 60000,
+    // idleTimeoutMs in the WS client: reset on every event from the
+    // host (queued/started/chunk/done), so this caps "no events for
+    // N seconds", not total wall-clock. Big distillation prompts on
+    // gemma4:e4b can take 30-60s of prompt processing before the
+    // first chunk; we want headroom over that.
+    timeoutMs: 120000,
     retries: 1,
   },
   embeddingService: {
