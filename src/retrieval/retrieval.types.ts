@@ -113,6 +113,16 @@ export interface RetrieveEvidenceData {
   normalizedQuery: NormalizedQuery;
   searchQueries: string[];
   evidenceChunks: EvidenceChunk[];
+  /**
+   * Prose answer-aid produced by the utility LLM from the raw,
+   * uncapped extracted page text. Present when live retrieval ran and
+   * the utility LLM was reachable. Consumers should prefer this over
+   * stitching the snippets in evidenceChunks themselves — those are
+   * truncated for stream-event payload size and for the legacy code
+   * path that does not run the distillation step.
+   */
+  preparedPrompt?: string;
+  preparedPromptModel?: string | null;
   retrievalDiagnostics: RetrievalDiagnostics;
 }
 
@@ -128,6 +138,9 @@ export type RetrievalStreamEventType =
   | 'live.search.completed'
   | 'live.extract.started'
   | 'live.extract.completed'
+  | 'distillation.started'
+  | 'distillation.completed'
+  | 'distillation.skipped'
   | 'evidence.chunk'
   | 'retrieval.completed'
   | 'retrieval.failed';

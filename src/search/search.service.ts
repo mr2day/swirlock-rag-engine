@@ -303,9 +303,14 @@ export class SearchService {
   ): Promise<ExaExtractSearchResponse> {
     const exaClient = this.getExaClient();
 
+    // Pulled wide on purpose: the orchestrator's downstream pipeline
+    // now passes raw extracted text through the utility LLM for
+    // distillation, so we want the full page body (up to Exa's own
+    // internal ceiling), not a snippet. The local 900-char excerpt
+    // clip below still kicks in for the legacy non-distilled path.
     const response = await exaClient.getContents(urls, {
       text: {
-        maxCharacters: 2600,
+        maxCharacters: 24000,
       },
       highlights: {
         query,

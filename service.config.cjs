@@ -13,8 +13,8 @@ const runtime = {
   liveExtractLimit: 15,
   utilityLlm: {
     enabled: true,
-    hostUrl: 'http://127.0.0.1:3213',
-    timeoutMs: 30000,
+    hostUrl: 'ws://192.168.0.194:3213',
+    timeoutMs: 60000,
     retries: 1,
   },
   embeddingService: {
